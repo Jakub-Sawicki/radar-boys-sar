@@ -1,0 +1,9 @@
+# Pomiary radaru CN0566 - rozszerzone metody
+# Data: 2025-07-14 10:04:12
+# Częstotliwość: 10.394 GHz
+# Rozmiar kroku: 0.2 mm
+# Estymowane współrzędne celu: (0.997, 0.074) m
+# Kąt z estymacji współrzędnych: 4.25°
+# Kąt z Synthetic Aperture: -90.00°
+# Kolumny: Pomiar, Pozycja[m], Kąt_Podstawowy, Kąt_MLE, Kąt_Estym_Współrz, Kąt_SA
+  1  0.00000    4.25   -5.48    4.25  -90.00
