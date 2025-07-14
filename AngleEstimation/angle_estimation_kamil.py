@@ -43,9 +43,11 @@ def analyze_angle_estimation(data_ch0, data_ch1, freq_hz=10.3943359375e9):
     
     # Oblicz korelację między kanałami
     correlation = np.mean(data_ch0 * np.conj(data_ch1))
+
+    calibrated_correlation = correlation# * np.exp(-1j * np.deg2rad(125))
     
     # Różnica fazowa między kanałami
-    phase_diff = np.angle(correlation)
+    phase_diff = np.angle(calibrated_correlation)
     
     # Estymacja kąta na podstawie różnicy fazowej
     sin_theta = phase_diff / (2 * np.pi * d_over_lambda)
@@ -57,22 +59,35 @@ def analyze_angle_estimation(data_ch0, data_ch1, freq_hz=10.3943359375e9):
     estimated_angle_rad = np.arcsin(sin_theta)
     estimated_angle_deg = np.rad2deg(estimated_angle_rad)
     
-    return estimated_angle_deg, phase_diff, correlation
+    return estimated_angle_deg, phase_diff, calibrated_correlation
 
 def analyze_mle_method(data_ch0, data_ch1, freq_hz=10.3943359375e9):
     """
-    Metoda MLE dla estymacji kąta
+    Metoda MLE dla estymacji kąta - poprawiona wersja
     """
     c = 3e8
     lambda_m = c / freq_hz
     d_m = 0.014
     d_over_lambda = d_m / lambda_m
     
-    Y = np.array([np.mean(data_ch0), np.mean(data_ch1)]).reshape(-1, 1)
-    M = 2
+    # Jeśli data_ch0 i data_ch1 to pojedyncze próbki zespolone
+    if np.isscalar(data_ch0) or (hasattr(data_ch0, '__len__') and len(data_ch0) == 1):
+        # Pojedyncze próbki - stwórz macierz obserwacji
+        if np.isscalar(data_ch0):
+            Y = np.array([[data_ch0], [data_ch1]])
+        else:
+            Y = np.array([[data_ch0[0]], [data_ch1[0]]])
+        N = 1
+    else:
+        # Wiele próbek - stwórz macierz obserwacji M x N
+        min_len = min(len(data_ch0), len(data_ch1))
+        Y = np.array([data_ch0[:min_len], data_ch1[:min_len]])
+        N = min_len
     
-    # Macierz korelacji
-    R = np.outer(Y.flatten(), Y.flatten().conj()) / np.linalg.norm(Y) ** 2
+    M = 2  # liczba kanałów
+    
+    # Macierz korelacji - POPRAWIONA
+    R = np.dot(Y, Y.conj().T) / N
     
     def steering_vector(angle_deg):
         angle_rad = np.deg2rad(angle_deg)
@@ -85,12 +100,37 @@ def analyze_mle_method(data_ch0, data_ch1, freq_hz=10.3943359375e9):
         if np.abs(aH_a) < 1e-12:
             return np.inf
             
+        # Projektor ortogonalny do podprzestrzeni sygnału
         P_perp = np.eye(M) - np.dot(a, a.conj().T) / aH_a
+        
+        # Funkcja kosztu MLE
         J = np.real(np.trace(np.dot(P_perp, R)))
         return J
     
-    result = minimize_scalar(cost_function, bounds=(-90, 90), method="bounded")
-    return result.x
+    # Optymalizacja z wieloma punktami startowymi (jak w MATLAB)
+    best_angle = 0
+    best_cost = np.inf
+    
+    # Spróbuj różnych punktów startowych
+    start_angles = [-45, -30, -15, 0, 15, 30, 45]
+    
+    for start_angle in start_angles:
+        try:
+            result = minimize_scalar(cost_function, bounds=(-90, 90), method="bounded")
+            if result.fun < best_cost:
+                best_cost = result.fun
+                best_angle = result.x
+        except:
+            continue
+    
+    # Jeśli optymalizacja się nie powiodła, użyj prostego przeszukiwania
+    if best_cost == np.inf:
+        angles_test = np.linspace(-90, 90, 1801)  # co 0.1 stopnia
+        costs = [cost_function(angle) for angle in angles_test]
+        min_idx = np.argmin(costs)
+        best_angle = angles_test[min_idx]
+    
+    return best_angle
 
 def analyze_coordinate_estimation_method(measurements_data, positions, freq_hz=10.3943359375e9):
     """
@@ -368,12 +408,14 @@ def main():
         current_position = i * STEP_SIZE_M
         
         # Pobierz dane z radaru
-        ch0, ch1 = acquire_data(sdr)
+        # ch0, ch1 = acquire_data(sdr)
+        ch0, ch1 = [21.1706135741686 - 0.888916916651944j, 19.8632052111244 - 4.35960460501996j]
         
         # Podstawowe analizy
         angle_basic, _, _ = analyze_angle_estimation(ch0, ch1, phaser.SignalFreq)
         angle_mle = analyze_mle_method(ch0, ch1, phaser.SignalFreq)
-        
+        angle_mle = angle_mle #+ 45
+
         # Zapisz dane do struktur
         measurements_data['ch0'].append(ch0)
         measurements_data['ch1'].append(ch1)
