@@ -1,7 +1,7 @@
-function angleDetEstimated = MLE_sar(Y, elementPositions_mm)
+function angleDetEstimated = MLE_sar(Y, elementPositions_mm, freq)
     [M, N] = size(Y);
     R = Y * Y' / N;
-    lambda_mm = 3e8 / 24e9 * 1e3;
+    lambda_mm = 3e8 / freq * 1e3;
 
     function J = CostFunction(angleDeg)
         aTemp = a_sar(angleDeg, elementPositions_mm, lambda_mm);
@@ -10,7 +10,7 @@ function angleDetEstimated = MLE_sar(Y, elementPositions_mm)
     end
     
     minAngle = -45;
-    maxAngle = 45;
+    maxAngle = 44;
     angleVec = minAngle:0.1:maxAngle;
     pval = zeros(size(angleVec));
     for k = 1:length(angleVec)
