@@ -2,13 +2,13 @@ import time
 import numpy as np
 import socket
 import matplotlib.pyplot as plt
-from scipy.optimize import minimize_scalar
+from scipy.optimize import minimize_scalar, fminbound
 from adi import ad9361
 from adi.cn0566 import CN0566
 
 ESP32_IP = "192.168.0.103"
 ESP32_PORT = 3333
-MEASUREMENTS = 1  # ile kroków i pomiarów
+MEASUREMENTS = 30  # ile kroków i pomiarów
 STEP_SIZE_M = 0.00018  # rozmiar kroku w metrach (0.18mm)
 
 def connect_esp32():
@@ -43,9 +43,11 @@ def analyze_angle_estimation(data_ch0, data_ch1, freq_hz=10.3943359375e9):
     
     # Oblicz korelację między kanałami
     correlation = np.mean(data_ch0 * np.conj(data_ch1))
+
+    calibrated_correlation = correlation# * np.exp(-1j * np.deg2rad(125))
     
     # Różnica fazowa między kanałami
-    phase_diff = np.angle(correlation)
+    phase_diff = np.angle(calibrated_correlation)
     
     # Estymacja kąta na podstawie różnicy fazowej
     sin_theta = phase_diff / (2 * np.pi * d_over_lambda)
@@ -57,40 +59,101 @@ def analyze_angle_estimation(data_ch0, data_ch1, freq_hz=10.3943359375e9):
     estimated_angle_rad = np.arcsin(sin_theta)
     estimated_angle_deg = np.rad2deg(estimated_angle_rad)
     
-    return estimated_angle_deg, phase_diff, correlation
+    return estimated_angle_deg, phase_diff, calibrated_correlation
 
-def analyze_mle_method(data_ch0, data_ch1, freq_hz=10.3943359375e9):
+def analyze_mle_method(measurment_data, freq_hz=10.3943359375e9):
     """
-    Metoda MLE dla estymacji kąta
+    Poprawiona implementacja MLE dla estymacji kąta
     """
     c = 3e8
     lambda_m = c / freq_hz
-    d_m = 0.014
-    d_over_lambda = d_m / lambda_m
-    
-    Y = np.array([np.mean(data_ch0), np.mean(data_ch1)]).reshape(-1, 1)
+    d_m = 24.25e-3  # rozstaw anten w metrach
+   
+    # Wiele próbek
+    ch0 = measurment_data['ch0']  # lista 3 arrayów
+    ch1 = measurment_data['ch1']  # lista 3 arrayów
+
+    # Połącz pomiary w jeden długi wektor na kanał
+    ch0_combined = np.concatenate(ch0)  # shape (N,)
+    ch1_combined = np.concatenate(ch1)  # shape (N,)
+
+    # Stwórz macierz Y: każdy wiersz to jeden kanał
+    Y = np.vstack([ch0_combined, ch1_combined])  # shape (2, N)
+
+    # Teraz można policzyć macierz korelacyjną (lub macierz kowariancji)
+    N = Y.shape[1]  # liczba pomiarów (czyli długość sygnału)
     M = 2
-    
-    # Macierz korelacji
-    R = np.outer(Y.flatten(), Y.flatten().conj()) / np.linalg.norm(Y) ** 2
-    
-    def steering_vector(angle_deg):
+
+    R = np.dot(Y, Y.conj().T) / N 
+
+    # measurment_data['positions'] = [x + d_m for x in measurment_data['positions']]
+    positions_ch1 = [x + d_m for x in measurment_data['positions']]
+
+    # print(measurment_data['positions'])
+
+    def steering_vector(angle_deg, measurment_data):
         angle_rad = np.deg2rad(angle_deg)
-        return np.exp(1j * 2 * np.pi * d_over_lambda * np.sin(angle_rad) * np.arange(M)).reshape(-1, 1)
+        k = 2 * np.pi / lambda_m  # liczba falowa w metrach
+        positions = np.array([measurment_data['positions'], measurment_data['positions'])  # pozycje anten
+        print(positions)
+        print("\n")
+        return np.exp(1j * k * positions * np.sin(angle_rad)).reshape(-1, 1)
     
-    def cost_function(angle_deg):
-        a = steering_vector(angle_deg)
-        aH_a = np.dot(a.conj().T, a)
+    def cost_function(angle_deg, measurment_data):
+        a = steering_vector(angle_deg, measurment_data)
+        aH = a.conj().T
         
+        # Sprawdź czy macierz jest odwracalna
+        aH_a = np.dot(aH, a)
         if np.abs(aH_a) < 1e-12:
             return np.inf
-            
-        P_perp = np.eye(M) - np.dot(a, a.conj().T) / aH_a
-        J = np.real(np.trace(np.dot(P_perp, R)))
+        
+        inv_aH_a = 1.0 / aH_a[0, 0]  # dla macierzy 1x1
+        P_perp = np.eye(M) - np.dot(a, aH) * inv_aH_a
+        
+        J = np.abs(np.trace(np.dot(P_perp, R)))
         return J
     
-    result = minimize_scalar(cost_function, bounds=(-90, 90), method="bounded")
-    return result.x
+    steering_vector(5, measurment_data)
+    # print(cost_function())
+    
+    # min_angle = -45
+    # max_angle = 45
+    
+    # # Najpierw przeszukaj siatkę jak w MATLAB (co 0.1 stopnia)
+    # angle_vec = np.arange(min_angle, max_angle + 0.1, 0.1)
+    # pval = np.array([cost_function(angle) for angle in angle_vec])
+    
+    # # Znajdź najlepszy punkt startowy
+    # best_grid_idx = np.argmin(pval)
+    # best_grid_angle = angle_vec[best_grid_idx]
+    
+    # # Dokładna optymalizacja wokół najlepszego punktu (odpowiednik fminsearch)
+    # try:
+    #     result = fminbound(cost_function, 
+    #                       max(min_angle, best_grid_angle - 5), 
+    #                       min(max_angle, best_grid_angle + 5), 
+    #                       xtol=1e-6)
+    #     best_angle = result
+    #     best_cost = cost_function(result)
+    # except:
+    #     best_angle = best_grid_angle
+    #     best_cost = pval[best_grid_idx]
+    
+    # # Dodatkowa optymalizacja z różnych punktów startowych (jak w MATLAB)
+    # start_points = [min_angle, min_angle + 10, min_angle + 20, min_angle + 30, max_angle]
+    
+    # for start_angle in start_points:
+    #     try:
+    #         result = fminbound(cost_function, min_angle, max_angle, xtol=1e-6)
+    #         current_cost = cost_function(result)
+    #         if current_cost < best_cost:
+    #             best_cost = current_cost
+    #             best_angle = result
+    #     except:
+    #         continue
+    
+    # return best_angle
 
 def analyze_coordinate_estimation_method(measurements_data, positions, freq_hz=10.3943359375e9):
     """
@@ -269,10 +332,112 @@ def analyze_synthetic_aperture_method(measurements_data, positions, freq_hz=10.3
     
     return estimated_angle, beamformer_output, angles_to_test
 
+def analyze_mle_sar_method(measurements_data, positions, freq_hz=10.3943359375e9):
+    """
+    METODA 3: MLE dla Synthetic Aperture Radar - zgodna z MATLAB
+    """
+    print("[INFO] Analiza metodą MLE SAR...")
+    
+    c = 3e8
+    lambda_m = c / freq_hz
+    d_m = 0.014  # bazowy rozstaw anten
+    
+    # Zbuduj macierz pomiarową Y i pozycje elementów (jak w MATLAB)
+    virtualArray = []
+    elementPositions = []
+    
+    for i, (ch0, ch1, pos) in enumerate(zip(measurements_data['ch0'], 
+                                          measurements_data['ch1'], 
+                                          positions)):
+        # Pozycje anten dla tej iteracji (w metrach)
+        # Każda pozycja ma 2 anteny: pos i pos+d_m
+        pos_k = pos + np.array([0, d_m])
+        elementPositions.extend(pos_k)
+        
+        # Dodaj pomiar - każdy pomiar to 2 anteny
+        measure = np.array([ch0, ch1])
+        virtualArray.append(measure)
+    
+    # Przekształć do macierzy jak w MATLAB
+    Y = np.array(virtualArray).T  # M x N gdzie M = liczba elementów, N = liczba pomiarów
+    elementPositions = np.array(elementPositions)
+    
+    M, N = Y.shape
+    print(f"[INFO] Macierz Y: {M} x {N}")
+    print(f"[INFO] Liczba elementów: {len(elementPositions)}")
+    
+    # Macierz korelacji
+    R = np.dot(Y, Y.conj().T) / N
+    
+    def steering_vector_sar(angle_deg):
+        """Wektor kierunkowy dla SAR - zgodny z MATLAB a_sar"""
+        angle_rad = np.deg2rad(angle_deg)
+        k = 2 * np.pi / lambda_m
+        # Dokładnie jak w MATLAB: exp(1j * k * positions_mm(:) * sind(PhiDeg))
+        return np.exp(1j * k * elementPositions * np.sin(angle_rad)).reshape(-1, 1)
+    
+    def cost_function_sar(angle_deg):
+        """Funkcja kosztu MLE dla SAR - dokładnie jak w MATLAB"""
+        a = steering_vector_sar(angle_deg)
+        aH = a.conj().T
+        
+        aH_a = np.dot(aH, a)
+        if np.abs(aH_a) < 1e-12:
+            return np.inf
+        
+        # Projektor ortogonalny - dokładnie jak w MATLAB
+        # Pv = eye(M) - aTemp * ((aTemp') * aTemp)^(-1) * aTemp'
+        inv_aH_a = 1.0 / aH_a[0, 0]
+        P_perp = np.eye(M) - np.dot(a, aH) * inv_aH_a
+        
+        # Funkcja kosztu - abs(trace(Pv * R))
+        J = np.abs(np.trace(np.dot(P_perp, R)))
+        return J
+    
+    # Optymalizacja dokładnie jak w MATLAB
+    min_angle = -45
+    max_angle = 45
+    
+    # Przeszukiwanie siatki co 0.1 stopnia
+    angle_vec = np.arange(min_angle, max_angle + 0.1, 0.1)
+    pval = np.array([cost_function_sar(angle) for angle in angle_vec])
+    
+    # Znajdź najlepszy punkt z siatki
+    best_grid_idx = np.argmin(pval)
+    best_grid_angle = angle_vec[best_grid_idx]
+    
+    # Dokładna optymalizacja (odpowiednik fminsearch)
+    try:
+        result = fminbound(cost_function_sar, 
+                          max(min_angle, best_grid_angle - 5), 
+                          min(max_angle, best_grid_angle + 5), 
+                          xtol=1e-6)
+        best_angle = result
+        best_cost = cost_function_sar(result)
+    except:
+        best_angle = best_grid_angle
+        best_cost = pval[best_grid_idx]
+    
+    # Dodatkowa optymalizacja z różnych punktów startowych
+    start_points = [min_angle, -20, 0, 20, max_angle]
+    
+    for start_angle in start_points:
+        try:
+            result = fminbound(cost_function_sar, min_angle, max_angle, xtol=1e-6)
+            current_cost = cost_function_sar(result)
+            if current_cost < best_cost:
+                best_cost = current_cost
+                best_angle = result
+        except:
+            continue
+    
+    return best_angle, pval, angle_vec
+
 def main():
     print("===============================")
     print("    RADAR CN0566 + ESP32       ")
     print("  Rozszerzone metody estymacji  ")
+    print("  Z POPRAWIONĄ IMPLEMENTACJĄ MLE")
     print("===============================")
     
     # Połączenie z urządzeniami
@@ -329,7 +494,7 @@ def main():
     # Wyświetl parametry systemu
     c = 3e8
     lambda_m = c / phaser.SignalFreq
-    d_m = 0.014
+    d_m = 24.25e-3
     d_over_lambda = d_m / lambda_m
     
     print(f"[INFO] Częstotliwość: {phaser.SignalFreq/1e9:.3f} GHz")
@@ -348,9 +513,7 @@ def main():
     measurements_data = {
         'ch0': [],
         'ch1': [],
-        'positions': [],
-        'angles_basic': [],
-        'angles_mle': []
+        'positions': []
     }
     
     print(f"\n[INFO] Rozpoczynam {MEASUREMENTS} pomiarów...")
@@ -369,147 +532,156 @@ def main():
         
         # Pobierz dane z radaru
         ch0, ch1 = acquire_data(sdr)
+        # ch0, ch1 = [21.1706135741686 - 0.888916916651944j, 19.8632052111244 - 4.35960460501996j]
         
         # Podstawowe analizy
-        angle_basic, _, _ = analyze_angle_estimation(ch0, ch1, phaser.SignalFreq)
-        angle_mle = analyze_mle_method(ch0, ch1, phaser.SignalFreq)
-        
+        # angle_basic, _, _ = analyze_angle_estimation(ch0, ch1, phaser.SignalFreq)
+        # angle_mle = analyze_mle_method(ch0, ch1, phaser.SignalFreq, current_position)  # POPRAWIONA IMPLEMENTACJA
+
         # Zapisz dane do struktur
         measurements_data['ch0'].append(ch0)
         measurements_data['ch1'].append(ch1)
         measurements_data['positions'].append(current_position)
-        measurements_data['angles_basic'].append(angle_basic)
-        measurements_data['angles_mle'].append(angle_mle)
+        # measurements_data['angles_basic'].append(angle_basic)
+        # measurements_data['angles_mle'].append(angle_mle)
         
         print(f"[INFO] Pozycja: {current_position*100:.1f} cm")
-        print(f"[INFO] Kąt podstawowy: {angle_basic:.1f}°")
-        print(f"[INFO] Kąt MLE: {angle_mle:.1f}°")
+        # print(f"[INFO] Kąt podstawowy: {angle_basic:.1f}°")
+        # print(f"[INFO] Kąt MLE (poprawiony): {angle_mle:.1f}°")
         
         time.sleep(0.1)
     
     sock.close()
     print("\n[INFO] Pomiary zakończone, rozpoczynam analizę...")
+
+    angle_mle = analyze_mle_method(measurements_data, phaser.SignalFreq)
     
-    # ANALIZA METODĄ 1: Estymacja współrzędnych
-    target_coords, refined_angle, refined_angles = analyze_coordinate_estimation_method(
-        measurements_data, measurements_data['positions'], phaser.SignalFreq
-    )
+    # # ANALIZA METODĄ 1: Estymacja współrzędnych
+    # target_coords, refined_angle, refined_angles = analyze_coordinate_estimation_method(
+    #     measurements_data, measurements_data['positions'], phaser.SignalFreq
+    # )
     
-    # ANALIZA METODĄ 2: Synthetic Aperture
-    sa_angle, beamformer_output, test_angles = analyze_synthetic_aperture_method(
-        measurements_data, measurements_data['positions'], phaser.SignalFreq
-    )
+    # # ANALIZA METODĄ 2: Synthetic Aperture
+    # sa_angle, beamformer_output, test_angles = analyze_synthetic_aperture_method(
+    #     measurements_data, measurements_data['positions'], phaser.SignalFreq
+    # )
     
-    # Wyniki
-    print(f"\n===============================")
-    print(f"        WYNIKI ANALIZ          ")
-    print(f"===============================")
-    print(f"Średni kąt podstawowy: {np.mean(measurements_data['angles_basic']):.1f}°")
-    print(f"Średni kąt MLE: {np.mean(measurements_data['angles_mle']):.1f}°")
-    print(f"Estymowane współrzędne celu: ({target_coords[0]:.3f}, {target_coords[1]:.3f}) m")
-    print(f"Kąt z estymacji współrzędnych: {refined_angle:.1f}°")
-    print(f"Kąt z Synthetic Aperture: {sa_angle:.1f}°")
+    # # ANALIZA METODĄ 3: MLE SAR
+    # mle_sar_angle, mle_sar_pval, mle_sar_angles = analyze_mle_sar_method(
+    #     measurements_data, measurements_data['positions'], phaser.SignalFreq
+    # )
     
-    # Wykresy
-    plt.figure(figsize=(20, 12))
+    # # Wyniki
+    # print(f"\n===============================")
+    # print(f"        WYNIKI ANALIZ          ")
+    # print(f"===============================")
+    # print(f"Średni kąt podstawowy: {np.mean(measurements_data['angles_basic']):.1f}°")
+    # print(f"Średni kąt MLE (poprawiony): {np.mean(measurements_data['angles_mle']):.1f}°")
+    # print(f"Estymowane współrzędne celu: ({target_coords[0]:.3f}, {target_coords[1]:.3f}) m")
+    # print(f"Kąt z estymacji współrzędnych: {refined_angle:.1f}°")
+    # print(f"Kąt z Synthetic Aperture: {sa_angle:.1f}°")
+    # print(f"Kąt z MLE SAR: {mle_sar_angle:.1f}°")
     
-    # 1. Kąty w czasie
-    plt.subplot(2, 3, 1)
-    plt.plot(measurements_data['angles_basic'], 'b-o', label='Podstawowy', markersize=3)
-    plt.plot(measurements_data['angles_mle'], 'r-s', label='MLE', markersize=3)
-    plt.plot(refined_angles, 'g--', label='Estymacja współrzędnych')
-    plt.axhline(y=sa_angle, color='purple', linestyle=':', linewidth=2, label='Synthetic Aperture')
-    plt.title("Porównanie wszystkich metod")
-    plt.xlabel("Pomiar")
-    plt.ylabel("Kąt [°]")
-    plt.legend()
-    plt.grid(True)
+    # # Wykresy
+    # plt.figure(figsize=(20, 15))
     
-    # 2. Beamformer pattern
-    plt.subplot(2, 3, 2)
-    plt.plot(test_angles, 10*np.log10(beamformer_output + 1e-10), 'purple', linewidth=2)
-    plt.axvline(x=sa_angle, color='red', linestyle='--', label=f'Maksimum: {sa_angle:.1f}°')
-    plt.title("Wzorzec wiązki Synthetic Aperture")
-    plt.xlabel("Kąt [°]")
-    plt.ylabel("Moc [dB]")
-    plt.legend()
-    plt.grid(True)
+    # # 1. Kąty w czasie
+    # plt.subplot(2, 3, 1)
+    # plt.plot(measurements_data['angles_basic'], 'b-o', label='Podstawowy', markersize=3)
+    # plt.plot(measurements_data['angles_mle'], 'r-s', label='MLE', markersize=3)
+    # plt.plot(refined_angles, 'g--', label='Estymacja współrzędnych')
+    # plt.axhline(y=sa_angle, color='purple', linestyle=':', linewidth=2, label='Synthetic Aperture')
+    # plt.title("Porównanie wszystkich metod")
+    # plt.xlabel("Pomiar")
+    # plt.ylabel("Kąt [°]")
+    # plt.legend()
+    # plt.grid(True)
     
-    # 3. Pozycja celu
-    plt.subplot(2, 3, 3)
-    plt.plot(measurements_data['positions'], np.zeros_like(measurements_data['positions']), 'bo-', label='Pozycje radaru')
-    plt.plot(target_coords[0], target_coords[1], 'r*', markersize=15, label=f'Cel ({target_coords[0]:.2f}, {target_coords[1]:.2f})')
-    plt.title("Estymowana pozycja celu")
-    plt.xlabel("X [m]")
-    plt.ylabel("Y [m]")
-    plt.legend()
-    plt.grid(True)
-    plt.axis('equal')
+    # # 2. Beamformer pattern
+    # plt.subplot(2, 3, 2)
+    # plt.plot(test_angles, 10*np.log10(beamformer_output + 1e-10), 'purple', linewidth=2)
+    # plt.axvline(x=sa_angle, color='red', linestyle='--', label=f'Maksimum: {sa_angle:.1f}°')
+    # plt.title("Wzorzec wiązki Synthetic Aperture")
+    # plt.xlabel("Kąt [°]")
+    # plt.ylabel("Moc [dB]")
+    # plt.legend()
+    # plt.grid(True)
     
-    # 4. Histogram wszystkich kątów
-    plt.subplot(2, 3, 4)
-    plt.hist(measurements_data['angles_basic'], bins=15, alpha=0.7, label='Podstawowy', density=True)
-    plt.hist(measurements_data['angles_mle'], bins=15, alpha=0.7, label='MLE', density=True)
-    plt.axvline(x=refined_angle, color='green', linestyle='--', label='Estym. współrzędne')
-    plt.axvline(x=sa_angle, color='purple', linestyle=':', label='Synthetic Aperture')
-    plt.title("Rozkład estymowanych kątów")
-    plt.xlabel("Kąt [°]")
-    plt.ylabel("Gęstość")
-    plt.legend()
-    plt.grid(True)
+    # # 3. Pozycja celu
+    # plt.subplot(2, 3, 3)
+    # plt.plot(measurements_data['positions'], np.zeros_like(measurements_data['positions']), 'bo-', label='Pozycje radaru')
+    # plt.plot(target_coords[0], target_coords[1], 'r*', markersize=15, label=f'Cel ({target_coords[0]:.2f}, {target_coords[1]:.2f})')
+    # plt.title("Estymowana pozycja celu")
+    # plt.xlabel("X [m]")
+    # plt.ylabel("Y [m]")
+    # plt.legend()
+    # plt.grid(True)
+    # plt.axis('equal')
     
-    # 5. Błędy estymacji
-    plt.subplot(2, 3, 5)
-    basic_errors = np.array(measurements_data['angles_basic']) - refined_angle
-    mle_errors = np.array(measurements_data['angles_mle']) - refined_angle
-    plt.plot(basic_errors, 'b-', label='Błąd podstawowy', alpha=0.7)
-    plt.plot(mle_errors, 'r-', label='Błąd MLE', alpha=0.7)
-    plt.title("Błędy względem estymacji współrzędnych")
-    plt.xlabel("Pomiar")
-    plt.ylabel("Błąd [°]")
-    plt.legend()
-    plt.grid(True)
+    # # 4. Histogram wszystkich kątów
+    # plt.subplot(2, 3, 4)
+    # plt.hist(measurements_data['angles_basic'], bins=15, alpha=0.7, label='Podstawowy', density=True)
+    # plt.hist(measurements_data['angles_mle'], bins=15, alpha=0.7, label='MLE', density=True)
+    # plt.axvline(x=refined_angle, color='green', linestyle='--', label='Estym. współrzędne')
+    # plt.axvline(x=sa_angle, color='purple', linestyle=':', label='Synthetic Aperture')
+    # plt.title("Rozkład estymowanych kątów")
+    # plt.xlabel("Kąt [°]")
+    # plt.ylabel("Gęstość")
+    # plt.legend()
+    # plt.grid(True)
     
-    # 6. Stabilność metod
-    plt.subplot(2, 3, 6)
-    window_size = 20
-    if len(measurements_data['angles_basic']) >= window_size:
-        basic_std = [np.std(measurements_data['angles_basic'][i:i+window_size]) 
-                    for i in range(len(measurements_data['angles_basic'])-window_size)]
-        mle_std = [np.std(measurements_data['angles_mle'][i:i+window_size]) 
-                  for i in range(len(measurements_data['angles_mle'])-window_size)]
-        plt.plot(basic_std, 'b-', label='Stabilność podstawowa')
-        plt.plot(mle_std, 'r-', label='Stabilność MLE')
-        plt.title(f"Stabilność metod (okno {window_size})")
-        plt.xlabel("Pomiar")
-        plt.ylabel("Odchylenie std [°]")
-        plt.legend()
-        plt.grid(True)
+    # # 5. Błędy estymacji
+    # plt.subplot(2, 3, 5)
+    # basic_errors = np.array(measurements_data['angles_basic']) - refined_angle
+    # mle_errors = np.array(measurements_data['angles_mle']) - refined_angle
+    # plt.plot(basic_errors, 'b-', label='Błąd podstawowy', alpha=0.7)
+    # plt.plot(mle_errors, 'r-', label='Błąd MLE', alpha=0.7)
+    # plt.title("Błędy względem estymacji współrzędnych")
+    # plt.xlabel("Pomiar")
+    # plt.ylabel("Błąd [°]")
+    # plt.legend()
+    # plt.grid(True)
     
-    plt.tight_layout()
-    plt.show()
+    # # 6. Stabilność metod
+    # plt.subplot(2, 3, 6)
+    # window_size = 20
+    # if len(measurements_data['angles_basic']) >= window_size:
+    #     basic_std = [np.std(measurements_data['angles_basic'][i:i+window_size]) 
+    #                 for i in range(len(measurements_data['angles_basic'])-window_size)]
+    #     mle_std = [np.std(measurements_data['angles_mle'][i:i+window_size]) 
+    #               for i in range(len(measurements_data['angles_mle'])-window_size)]
+    #     plt.plot(basic_std, 'b-', label='Stabilność podstawowa')
+    #     plt.plot(mle_std, 'r-', label='Stabilność MLE')
+    #     plt.title(f"Stabilność metod (okno {window_size})")
+    #     plt.xlabel("Pomiar")
+    #     plt.ylabel("Odchylenie std [°]")
+    #     plt.legend()
+    #     plt.grid(True)
+    
+    # plt.tight_layout()
+    # plt.show()
     
     # Zapisz wyniki
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    filename = f"radar_enhanced_{timestamp}.txt"
+    # timestamp = time.strftime("%Y%m%d_%H%M%S")
+    # filename = f"radar_enhanced_{timestamp}.txt"
     
-    with open(filename, 'w') as f:
-        f.write("# Pomiary radaru CN0566 - rozszerzone metody\n")
-        f.write(f"# Data: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write(f"# Częstotliwość: {phaser.SignalFreq/1e9:.3f} GHz\n")
-        f.write(f"# Rozmiar kroku: {STEP_SIZE_M*1000:.1f} mm\n")
-        f.write(f"# Estymowane współrzędne celu: ({target_coords[0]:.3f}, {target_coords[1]:.3f}) m\n")
-        f.write(f"# Kąt z estymacji współrzędnych: {refined_angle:.2f}°\n")
-        f.write(f"# Kąt z Synthetic Aperture: {sa_angle:.2f}°\n")
-        f.write("# Kolumny: Pomiar, Pozycja[m], Kąt_Podstawowy, Kąt_MLE, Kąt_Estym_Współrz, Kąt_SA\n")
+    # with open(filename, 'w') as f:
+    #     f.write("# Pomiary radaru CN0566 - rozszerzone metody\n")
+    #     f.write(f"# Data: {time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    #     f.write(f"# Częstotliwość: {phaser.SignalFreq/1e9:.3f} GHz\n")
+    #     f.write(f"# Rozmiar kroku: {STEP_SIZE_M*1000:.1f} mm\n")
+    #     f.write(f"# Estymowane współrzędne celu: ({target_coords[0]:.3f}, {target_coords[1]:.3f}) m\n")
+    #     f.write(f"# Kąt z estymacji współrzędnych: {refined_angle:.2f}°\n")
+    #     f.write(f"# Kąt z Synthetic Aperture: {sa_angle:.2f}°\n")
+    #     f.write("# Kolumny: Pomiar, Pozycja[m], Kąt_Podstawowy, Kąt_MLE, Kąt_Estym_Współrz, Kąt_SA\n")
         
-        for i in range(len(measurements_data['angles_basic'])):
-            f.write(f"{i+1:3d} {measurements_data['positions'][i]:8.5f} ")
-            f.write(f"{measurements_data['angles_basic'][i]:7.2f} ")
-            f.write(f"{measurements_data['angles_mle'][i]:7.2f} ")
-            f.write(f"{refined_angles[i]:7.2f} {sa_angle:7.2f}\n")
+    #     for i in range(len(measurements_data['angles_basic'])):
+    #         f.write(f"{i+1:3d} {measurements_data['positions'][i]:8.5f} ")
+    #         f.write(f"{measurements_data['angles_basic'][i]:7.2f} ")
+    #         f.write(f"{measurements_data['angles_mle'][i]:7.2f} ")
+    #         f.write(f"{refined_angles[i]:7.2f} {sa_angle:7.2f}\n")
     
-    print(f"\n[INFO] Wyniki zapisane do: {filename}")
+    # print(f"\n[INFO] Wyniki zapisane do: {filename}")
 
 if __name__ == "__main__":
     main()
