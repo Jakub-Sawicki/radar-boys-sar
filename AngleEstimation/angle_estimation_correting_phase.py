@@ -231,7 +231,10 @@ def main():
         # print(f"[INFO] Pozycja: {current_position_ch0*100:.1f} cm")
         
         time.sleep(0.1)
-    
+
+    measurements_data['virtualArray'] = []
+    measurements_data['positions'] = []
+
     sock.close()
     print("\n[INFO] Pomiary zakończone, rozpoczynam analizę...")
     
