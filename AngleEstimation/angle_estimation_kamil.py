@@ -8,7 +8,7 @@ from adi.cn0566 import CN0566
 
 ESP32_IP = "192.168.0.103"
 ESP32_PORT = 3333
-MEASUREMENTS = 10     # ile kroków i pomiarów
+MEASUREMENTS = 60     # ile kroków i pomiarów
 STEP_SIZE_M = 0.00018  # rozmiar kroku w metrach (0.18mm)
 
 # ----------- ESP 32 handling -----------
@@ -166,10 +166,28 @@ def MLE_sar_full_aperture_dual(Y, element_positions_mm, freq_hz, verbose=False):
     R = (Y @ Y.conj().T) / N
     lambda_mm = 3e8 / freq_hz * 1e3
 
+    ch0_idx = np.arange(0, M, 2)  # Indeksy lewych anten
+    ch1_idx = np.arange(1, M, 2)  # Indeksy prawych anten
+
+    # Podziel dane i pozycje na dwa kanały
+    Y_left = Y[ch0_idx, :]
+    Y_right = Y[ch1_idx, :]
+
+    positions_left = element_positions_mm[ch0_idx]
+    positions_right = element_positions_mm[ch1_idx]
+
+    # Połącz lewy i prawy kanał jako syntetyczna linia antenowa
+    Y_sorted = np.vstack((Y_left, Y_right))  # (M, N)
+    element_positions_sorted = np.concatenate((positions_left, positions_right))  # (M,)
+
+    # Używamy tych zreorganizowanych danych dalej
+    Y = Y_sorted
+    element_positions_mm = element_positions_sorted
+    M = Y.shape[0]  # zaktualizowana liczba elementów
+
     def cost_function(angle_deg):
         a_temp = a_sar(angle_deg, element_positions_mm, lambda_mm)
         a_temp_h = a_temp.conj().T
-        print(element_positions_mm)
         denominator = a_temp_h @ a_temp
 
         if np.abs(denominator) < 1e-12:         # ochrona przed dzieleniem przez 0
