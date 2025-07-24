@@ -8,7 +8,7 @@ from adi.cn0566 import CN0566
 
 ESP32_IP = "192.168.0.103"
 ESP32_PORT = 3333
-MEASUREMENTS = 10     # ile kroków i pomiarów
+MEASUREMENTS = 5     # ile kroków i pomiarów
 STEP_SIZE_M = 0.00018  # rozmiar kroku w metrach (0.18mm)
 
 # ----------- ESP 32 handling -----------
@@ -73,6 +73,124 @@ def a_sar(angle_deg, element_positions_mm, lambda_mm):              # zgadza sie
     k = 2 * np.pi / lambda_mm
     # Steering vector: exp(j * k * d * sin(theta))
     return np.exp(1j * k * element_positions_mm * np.sin(angle_rad)).reshape(-1, 1)
+
+def MLE_sar_single(Y, element_positions_mm, freq_hz, verbose=False):
+    """
+    MLE estymacja kąta zgodna z implementacją MATLAB
+    Y - macierz danych (M x N), gdzie M to liczba anten, N to liczba próbek
+    element_positions_mm - pozycje elementów w mm
+    freq_hz - częstotliwość w Hz
+    """
+    M, N = Y.shape
+    
+    # Oblicz macierz kowariancji
+    R = (Y @ Y.conj().T) / N
+    
+    # Długość fali w mm
+    lambda_mm = 3e8 / freq_hz * 1e3
+    
+    def cost_function(angle_deg):
+        """Funkcja kosztu zgodna z MATLAB"""
+        a_temp = a_sar(angle_deg, element_positions_mm, lambda_mm)
+        
+        # Oblicz projektor ortogonalny Pv = I - a*(a'*a)^(-1)*a'
+        a_temp_h = a_temp.conj().T
+        denominator = a_temp_h @ a_temp
+        
+        # Sprawdź czy denominator nie jest zbyt mały
+        if np.abs(denominator) < 1e-12:
+            return np.inf
+        
+        Pv = np.eye(M) - a_temp @ (1/denominator) @ a_temp_h
+        
+        # Funkcja kosztu: trace(Pv * R)
+        cost = np.abs(np.trace(Pv @ R))
+        return cost
+    
+    # Zakres kąta
+    min_angle = -45
+    max_angle = 44
+    
+    if verbose:
+        # Wykreśl funkcję kosztu (jak w MATLAB)
+        angle_vec = np.arange(min_angle, max_angle + 0.1, 0.1)
+        pval = np.array([cost_function(angle) for angle in angle_vec])
+        
+        plt.figure(figsize=(10, 6))
+        plt.plot(angle_vec, pval)
+        plt.title("MLE z syntetycznej anteny")
+        plt.xlabel("Kąt [deg]")
+        plt.ylabel("Funkcja kosztu")
+        plt.grid(True)
+        plt.show()
+    
+    # Optymalizacja z wieloma punktami startowymi (jak w MATLAB)
+    best_angle = min_angle
+    best_cost = cost_function(min_angle)
+    
+    # Sprawdź różne punkty startowe
+    for start_angle in range(min_angle + 10, max_angle + 1, 10):
+        try:
+            result = minimize(cost_function, start_angle, method='Nelder-Mead',
+                            options={'xatol': 0.01, 'fatol': 1e-9})
+            if result.success and result.fun < best_cost:
+                # Sprawdź czy wynik jest w dozwolonym zakresie
+                if min_angle <= result.x <= max_angle:
+                    best_angle = result.x
+                    best_cost = result.fun
+        except:
+            continue
+    
+    return float(best_angle)
+
+def analyze_mle_single_measurement(data_ch0, data_ch1, freq_hz=10.3943359375e9, sample_rate=30e6, verbose=False):
+    """
+    MLE estymacja kąta dla pojedynczego pomiaru używając implementacji SAR
+    """
+
+    # Faza kalibracyjna (np. -90°)
+    calibration_phase_deg = 90
+    calibration_factor = np.exp(1j * np.deg2rad(calibration_phase_deg))
+
+    # Kalibruj np. kanał 1
+    data_ch1_calibrated = data_ch1 * calibration_factor
+
+    # Przygotuj dane w formacie macierzowym (2 x N)
+    Y = np.array([data_ch0, data_ch1_calibrated])  # (2, N)
+
+    # Pozycje anten w mm (0 dla kanału 0, 24.24mm dla kanału 1)
+    element_positions_mm = np.array([0.0, 24.24])  # mm
+
+    # Użyj MLE SAR
+    estimated_angle = MLE_sar_single(Y, element_positions_mm, freq_hz, verbose)
+
+    return estimated_angle
+
+def analyze_mle_method_all_data(measurement_data, verbose=False):
+    """
+    MLE estymacja kąta dla wszystkich pomiarów naraz używając implementacji SAR
+    """
+    # Połącz wszystkie dane
+    all_ch0 = np.concatenate(measurement_data['ch0'])
+    all_ch1 = np.concatenate(measurement_data['ch1'])
+
+    # Kalibracja fazowa kanału 1
+    calibration_phase_deg = -90
+    calibration_factor = np.exp(1j * np.deg2rad(calibration_phase_deg))
+    all_ch1_calibrated = all_ch1 * calibration_factor
+
+    # Przygotuj dane w formacie macierzowym
+    Y = np.array([all_ch0, all_ch1_calibrated])  # (2, total_N)
+
+    # Pozycje anten w mm
+    element_positions_mm = np.array([0.0, 24.24])  # mm
+
+    freq_hz = 10.3943359375e9  # Można to parametryzować jeśli potrzeba
+
+    # Użyj MLE SAR
+    estimated_angle = MLE_sar_single(Y, element_positions_mm, freq_hz, verbose)
+
+    return estimated_angle
 
 def plot_measurement_analysis(measurements_data, freq_hz=10.3943359375e9):
     """
@@ -169,7 +287,6 @@ def MLE_sar_full_aperture_dual(Y, element_positions_mm, freq_hz, verbose=False):
     def cost_function(angle_deg):
         a_temp = a_sar(angle_deg, element_positions_mm, lambda_mm)
         a_temp_h = a_temp.conj().T
-        print(element_positions_mm)
         denominator = a_temp_h @ a_temp
 
         if np.abs(denominator) < 1e-12:         # ochrona przed dzieleniem przez 0
@@ -375,11 +492,17 @@ def main():
         measurements_data['basic_angles'].append(angle_basic)
         
         try:
+            # angle_mle = analyze_mle_single_measurement(ch0, ch1, phaser.SignalFreq, sdr.sample_rate)
+            # measurements_data['mle_angles'].append(angle_mle)
             print(f"[INFO] Pozycja: {current_position*100:.1f} cm")
             print(f"[INFO] Kąt podstawowy: {angle_basic:.1f}°")
+            # print(f"[INFO] Kąt MLE SAR: {angle_mle:.1f}°")
         except Exception as e:
+            # print(f"[ERROR] Błąd w MLE: {e}")
+            # measurements_data['mle_angles'].append(np.nan)
             print(f"[INFO] Pozycja: {current_position*100:.1f} cm")
             print(f"[INFO] Kąt podstawowy: {angle_basic:.1f}°")
+            # print(f"[INFO] Kąt MLE SAR: ERROR")
         
         time.sleep(0.05)
     
