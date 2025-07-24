@@ -1,207 +1,238 @@
 import time
 import numpy as np
+import socket
 import matplotlib.pyplot as plt
-from scipy.optimize import minimize_scalar
-
+from scipy.optimize import minimize_scalar, fminbound
 from adi import ad9361
 from adi.cn0566 import CN0566
 
-# -----------------------------
-# MLE single snapshot function
-# -----------------------------
-def analyze_single_snapshot(data_vector):
-    Y = np.array(data_vector).reshape(-1, 1)
-    M = len(data_vector)
-    R = np.outer(Y.flatten(), Y.flatten().conj()) / np.linalg.norm(Y) ** 2
-    d_over_lambda = 1.94
+ESP32_IP = "192.168.0.103"
+ESP32_PORT = 3333
+MEASUREMENTS = 1  # ile kroków i pomiarów
+STEP_SIZE_M = 0.00018  # rozmiar kroku w metrach (0.18mm)
 
-    def a(angleDeg, M, d_over_lambda):
-        angle_rad = np.deg2rad(angleDeg)
-        return np.exp(1j * 2 * np.pi * d_over_lambda * np.sin(angle_rad) * np.arange(M)).reshape(-1, 1)
+def connect_esp32():
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((ESP32_IP, ESP32_PORT))
+    s.settimeout(5)
+    print("[INFO] Połączono z ESP32")
+    return s
 
-    def CostFunction(angleDeg):
-        aTemp = a(angleDeg, M, d_over_lambda)
-        aH_a = np.dot(aTemp.conj().T, aTemp)
+def send_step_and_wait(sock):
+    sock.sendall(b"STEP_CCW\n")
+    data = sock.recv(1024)
+    if b"DONE_CCW" in data:
+        print("[INFO] ESP32 wykonał krok")
+    else:
+        print("[WARN] Otrzymano:", data)
+
+def acquire_data(sdr):
+    samples = sdr.rx()
+    ch0 = samples[0]
+    ch1 = samples[1]
+    return ch0, ch1
+
+def MLE_SAR(measurements_data):
+    print("[INFO] Analiza metodą MLE SAR...")
+
+    freq_hz = 10.3943359375e9
+    c = 3e8
+    lambda_mm = c / freq_hz * 1e3
+    d_m = 24.25e-3  # rozstaw anten (nieużywany bezpośrednio tutaj)
+
+    virtualArray = np.vstack(measurements_data['virtualArray'])
+    virtualArray = np.vstack(measurements_data['virtualArray'])
+
+    N = measurements_data['virtualArray'].size
+
+    # Macierz korelacji
+    R = np.dot(measurements_data['virtualArray'], measurements_data['virtualArray'].conj().T) / N
+
+    def steering_vector_sar(angle_deg, positions_mm, lambda_mm):
+        angle_rad = np.deg2rad(angle_deg)
+        k = 2 * np.pi / lambda_mm
+        return np.exp(1j * k * positions_mm * np.sin(angle_rad)).reshape(-1, 1)
+
+    def cost_function_sar(angle_deg, positions_mm):
+        a = steering_vector_sar(angle_deg, positions_mm, lambda_mm)
+        aH = a.conj().T
+
+        aH_a = np.dot(aH, a)
         if np.abs(aH_a) < 1e-12:
             return np.inf
-        Pv = np.eye(M) - np.dot(aTemp, aTemp.conj().T) / aH_a
-        J = np.abs(np.trace(np.dot(Pv, R)))
+
+        inv_aH_a = 1.0 / aH_a[0, 0]
+        P_perp = np.eye(M) - np.dot(a, aH) * inv_aH_a
+
+        J = np.abs(np.trace(np.dot(P_perp, R)))
         return J
 
-    result = minimize_scalar(CostFunction, bounds=(-90, 90), method="bounded")
-    return result.x, CostFunction
+    positions_mm = measurements_data['elementPositions']
 
-def plot_angle_cost_function(CostFunction, estimated_angle):
-    angleVec = np.linspace(-90, 90, 500)
-    costVals = [CostFunction(a) for a in angleVec]
+    # Siatka przeszukiwania
+    min_angle = -45
+    max_angle = 45
+    angle_vec = np.arange(min_angle, max_angle + 0.1, 0.1)
+    pval = np.array([cost_function_sar(angle, positions_mm) for angle in angle_vec])
 
-    # plt.figure(figsize=(10, 5))
-    # plt.plot(angleVec, costVals, label='Cost Function')
-    # plt.axvline(estimated_angle, color='r', linestyle='--', label=f'Est: {estimated_angle:.2f}°')
-    # plt.xlabel('Angle (deg)')
-    # plt.ylabel('Cost')
-    # plt.title('MLE Cost Function vs Angle')
-    # plt.legend()
-    # plt.grid(True)
-    # plt.show()
+    # Rysowanie wykresu jak w MATLAB
+    plt.figure(figsize=(10, 6))
+    plt.plot(angle_vec, pval, label="MLE Cost Function")
+    plt.title("MLE z syntetycznej anteny")
+    plt.xlabel("Kąt [deg]")
+    plt.ylabel("Funkcja kosztu")
+    plt.grid(True)
+    plt.legend()
+    plt.show()
 
-def plot_complex_plane(data_vector):
-    real_parts = np.real(data_vector)
-    imag_parts = np.imag(data_vector)
+    # Znajdź najlepszy punkt z siatki
+    best_grid_idx = np.argmin(pval)
+    best_grid_angle = angle_vec[best_grid_idx]
 
-    # plt.figure(figsize=(6, 6))
-    # plt.scatter(real_parts, imag_parts, c='b', s=80)
-    # for idx, (r, im) in enumerate(zip(real_parts, imag_parts)):
-    #     plt.text(r, im, f'{idx}', fontsize=12)
-    # plt.xlabel('Real')
-    # plt.ylabel('Imag')
-    # plt.title('Snapshot Complex Plane')
-    # plt.grid(True)
-    # plt.axis('equal')
-    # plt.show()
+    # Optymalizacja lokalna wokół najlepszego kąta z siatki
+    try:
+        result = fminbound(lambda angle: cost_function_sar(angle, positions_mm),
+                           max(min_angle, best_grid_angle - 5),
+                           min(max_angle, best_grid_angle + 5),
+                           xtol=1e-6)
+        best_angle = result
+        best_cost = cost_function_sar(result, positions_mm)
+    except:
+        best_angle = best_grid_angle
+        best_cost = pval[best_grid_idx]
 
-def process_received_data(data):
-    """
-    Przetwarza dane odebrane z dwóch kanałów.
-    Zwraca reprezentatywne wartości zespolone zachowujące fazę.
-    """
-    # Opcja 1: Użyj pierwszej próbki (dla sygnałów CW)
-    channel_data = [data[0][0], data[1][0]]
-    
-    # Opcja 2: Średnia z zachowaniem fazy (dla sygnałów modulowanych)
-    # channel_data = [np.mean(data[0]), np.mean(data[1])]
-    
-    # Opcja 3: Korelacja ze znanym sygnałem (dla konkretnych modulacji)
-    # reference_signal = np.exp(1j * 2 * np.pi * np.arange(len(data[0])))
-    # channel_data = [np.sum(data[0] * reference_signal.conj()),
-    #                 np.sum(data[1] * reference_signal.conj())]
-    
-    return channel_data
-
-def calculate_phase_difference(ch0, ch1):
-    """Oblicza różnicę faz między kanałami"""
-    phase_diff = np.angle(ch1) - np.angle(ch0)
-    # Normalizacja do zakresu [-π, π]
-    phase_diff = np.arctan2(np.sin(phase_diff), np.cos(phase_diff))
-    return np.degrees(phase_diff)
-
-# -----------------------------
-# Connection to CN0566 + Pluto
-# -----------------------------
-try:
-    print("Connecting to CN0566 via ip:localhost...")
-    my_phaser = CN0566(uri="ip:localhost")
-    print("CN0566 found. Connecting to PlutoSDR via ip:192.168.2.1...")
-    my_sdr = ad9361(uri="ip:192.168.2.1")
-except:
-    print("Connecting via fallback ip:phaser.local...")
-    my_phaser = CN0566(uri="ip:phaser.local")
-    my_sdr = ad9361(uri="ip:phaser.local:50901")
-
-my_phaser.sdr = my_sdr
-
-# -----------------------------
-# Configuration of devices
-# -----------------------------
-time.sleep(0.5)
-my_phaser.configure(device_mode="rx")
-my_sdr._ctrl.debug_attrs["adi,frequency-division-duplex-mode-enable"].value = "1"
-my_sdr._ctrl.debug_attrs["adi,ensm-enable-txnrx-control-enable"].value = "0"
-my_sdr._ctrl.debug_attrs["initialize"].value = "1"
-
-my_sdr.rx_enabled_channels = [0, 1]
-my_sdr._rxadc.set_kernel_buffers_count(1)
-rx = my_sdr._ctrl.find_channel("voltage0")
-rx.attrs["quadrature_tracking_en"].value = "1"
-my_sdr.sample_rate = int(30e6)
-my_sdr.rx_buffer_size = int(4 * 256)
-my_sdr.rx_rf_bandwidth = int(10e6)
-my_sdr.gain_control_mode_chan0 = "manual"
-my_sdr.gain_control_mode_chan1 = "manual"
-my_sdr.rx_hardwaregain_chan0 = 0
-my_sdr.rx_hardwaregain_chan1 = 0
-my_sdr.rx_lo = int(2.0e9)
-my_sdr.filter = "LTE20_MHz.ftr"
-
-my_sdr.tx_hardwaregain_chan0 = -80
-my_sdr.tx_hardwaregain_chan1 = -80
-
-# UWAGA: Częstotliwość sygnału znaleziona przez sweep
-my_phaser.SignalFreq = 10.3943359375e9
-# LO frequency dla całego systemu
-my_phaser.lo = int(my_phaser.SignalFreq) + my_sdr.rx_lo
-
-# Set gain on all 8 antennas
-gain_list = [64] * 8
-for i in range(len(gain_list)):
-    my_phaser.set_chan_gain(i, gain_list[i], apply_cal=False)
-
-# Set phaser to boresight
-my_phaser.set_beam_phase_diff(0.0)
-my_phaser.Averages = 8
-
-print("\n===============================")
-print("       ANGLE DETECTION         ")
-print("===============================")
-print(f"Signal frequency: {my_phaser.SignalFreq/1e9:.4f} GHz")
-print(f"SDR RX LO: {my_sdr.rx_lo/1e9:.4f} GHz")
-print(f"Phaser LO: {my_phaser.lo/1e9:.4f} GHz")
-
-try:
-    while True:
-        print("\nCollecting 2-channel RX data for angle estimation...")
-        data = my_sdr.rx()
-        
-        # POPRAWKA: Użyj funkcji zachowującej fazę
-        channel_data = process_received_data(data)
-        
-        print(f"RX0 complex: {channel_data[0]}")
-        print(f"RX1 complex: {channel_data[1]}")
-        # channel_data[0] = complex(20.3801880803942, -1.59724593307763)
-        # channel_data[1] = complex(10.8204036839501, -16.9772803145076)
-        
-        # Sprawdź moc sygnału
-        power_ch0 = np.abs(channel_data[0])**2
-        power_ch1 = np.abs(channel_data[1])**2
-        print(f"Power CH0: {power_ch0:.2e}, Power CH1: {power_ch1:.2e}")
-        
-        # Różnica faz
-        phase_diff = calculate_phase_difference(channel_data[0], channel_data[1])
-        print(f"Phase difference: {phase_diff:.2f}°")
-        
-        # Sprawdź czy mamy wystarczającą moc sygnału
-        if power_ch0 < 1e-10 or power_ch1 < 1e-10:
-            print("⚠️  Bardzo słaby sygnał - sprawdź konfigurację!")
-            user_in = input("\nContinue measurement? (y/n): ").strip().lower()
-            if user_in != 'y':
-                break
+    # Dodatkowa optymalizacja z różnych punktów
+    start_points = [min_angle, -20, 0, 20, max_angle]
+    for start_angle in start_points:
+        try:
+            result = fminbound(lambda angle: cost_function_sar(angle, positions_mm),
+                               min_angle, max_angle, xtol=1e-6)
+            current_cost = cost_function_sar(result, positions_mm)
+            if current_cost < best_cost:
+                best_cost = current_cost
+                best_angle = result
+        except:
             continue
 
-        print("Estimating angle...")
-        estimated_angle, cost_func = analyze_single_snapshot(channel_data)
+    print(f"[INFO] Oszacowany kąt: {best_angle:.2f}°")
+    return best_angle
 
-        print(f"\n🎯 Estimated Angle: {(estimated_angle+45):.2f}°")
-
-        # Plot cost function
-        plot_angle_cost_function(cost_func, estimated_angle)
-
-        # Plot data in complex plane
-        plot_complex_plane(channel_data)
-
-        user_in = input("\nContinue measurement? (y/n): ").strip().lower()
-        if user_in != 'y':
-            break
-
-except KeyboardInterrupt:
-    print("\nInterrupted by user.")
-
-finally:
-    print("\nCleaning up resources...")
+def main():
+    print("===============================")
+    print("    RADAR CN0566 + ESP32       ")
+    print("===============================")
+    
+    # Połączenie z urządzeniami
     try:
-        del my_sdr
-        del my_phaser
-        print("Resources cleaned up.")
+        print("[INFO] Próba połączenia z CN0566...")
+        phaser = CN0566(uri="ip:phaser.local")
+        sdr = ad9361(uri="ip:phaser.local:50901")
     except:
-        pass
+        print("[INFO] Próba połączenia po localhost")
+        phaser = CN0566(uri="ip:localhost")
+        sdr = ad9361(uri="ip:192.168.2.1")
+    
+    phaser.sdr = sdr
+    
+    # Konfiguracja urządzeń
+    time.sleep(0.5)
+    phaser.configure(device_mode="rx")
+    sdr._ctrl.debug_attrs["adi,frequency-division-duplex-mode-enable"].value = "1"
+    sdr._ctrl.debug_attrs["adi,ensm-enable-txnrx-control-enable"].value = "0"
+    sdr._ctrl.debug_attrs["initialize"].value = "1"
+    
+    sdr.rx_enabled_channels = [0, 1]
+    sdr._rxadc.set_kernel_buffers_count(1)
+    rx = sdr._ctrl.find_channel("voltage0")
+    rx.attrs["quadrature_tracking_en"].value = "1"
+    
+    # Parametry próbkowania
+    sdr.sample_rate = int(30e6)
+    sdr.rx_buffer_size = int(4 * 1024)
+    sdr.rx_rf_bandwidth = int(10e6)
+    sdr.gain_control_mode_chan0 = "manual"
+    sdr.gain_control_mode_chan1 = "manual"
+    sdr.rx_hardwaregain_chan0 = 0
+    sdr.rx_hardwaregain_chan1 = 0
+    sdr.rx_lo = int(2.0e9)
+    sdr.filter = "LTE20_MHz.ftr"
+    
+    # Wyłącz nadawanie
+    sdr.tx_hardwaregain_chan0 = -80
+    sdr.tx_hardwaregain_chan1 = -80
+    
+    # Konfiguracja phasera
+    phaser.SignalFreq = 10.3943359375e9
+    phaser.lo = int(phaser.SignalFreq) + sdr.rx_lo
+    
+    # Ustawienie wzmocnienia na wszystkich 8 antenach
+    gain_list = [64] * 8
+    for i in range(len(gain_list)):
+        phaser.set_chan_gain(i, gain_list[i], apply_cal=False)
+    
+    phaser.set_beam_phase_diff(0.0)
+    phaser.Averages = 16
+    
+    # Wyświetl parametry systemu
+    c = 3e8
+    lambda_m = c / phaser.SignalFreq
+    d_m = 24.25e-3
+    d_over_lambda = d_m / lambda_m
+    
+    print(f"[INFO] Częstotliwość: {phaser.SignalFreq/1e9:.3f} GHz")
+    print(f"[INFO] Długość fali: {lambda_m*100:.2f} cm")
+    print(f"[INFO] Rozstaw anten: {d_m*100:.1f} cm")
+    print(f"[INFO] Rozmiar kroku: {STEP_SIZE_M*1000:.1f} mm")
+    print(f"[INFO] d/λ = {d_over_lambda:.3f}")
+    
+    time.sleep(0.5)
+    
+    # Połączenie z ESP32
+    sock = connect_esp32()
+    time.sleep(1)
+    
+    # Struktury danych dla nowych metod
+    measurements_data = {
+        'virtualArray': [],
+        'positions': [],
+        'angles_basic': [],
+        'angles_mle': []
+    }
+    
+    print(f"\n[INFO] Rozpoczynam {MEASUREMENTS} pomiarów...")
+    
+    # Główna pętla pomiarowa
+    for i in range(MEASUREMENTS):
+        print(f"\n[{i+1}/{MEASUREMENTS}] Pomiar...")
+        
+        # Wykonaj krok na ESP32
+        if i > 0:  # nie rób kroku przy pierwszym pomiarze
+            send_step_and_wait(sock)
+            time.sleep(0.3)
+        
+        # Oblicz aktualną pozycję
+        current_position_ch0 = i * STEP_SIZE_M
+        current_position_ch1 = i * STEP_SIZE_M + d_m
+        
+        # Pobierz dane z radaru
+        ch0, ch1 = acquire_data(sdr)
+        # ch0, ch1 = [21.1706135741686 - 0.888916916651944j, 19.8632052111244 - 4.35960460501996j]
 
-print("Measurement session completed.")
+
+        # Zapisz dane do struktur
+        measurements_data['virtualArray'].append(ch0)
+        measurements_data['virtualArray'].append(ch1)
+        measurements_data['positions'].append(current_position_ch0)
+        measurements_data['positions'].append(current_position_ch1)
+        
+        # print(f"[INFO] Pozycja: {current_position_ch0*100:.1f} cm")
+        
+        time.sleep(0.1)
+    
+    sock.close()
+    print("\n[INFO] Pomiary zakończone, rozpoczynam analizę...")
+    
+    mle_sar_angle = MLE_SAR(measurements_data)
+
+if __name__ == "__main__":
+    main()
