@@ -10,7 +10,7 @@ import threading
 
 ESP32_IP = "192.168.0.103"
 ESP32_PORT = 3333
-MEASUREMENTS = 200     # ile kroków i pomiarów
+MEASUREMENTS = 50     # ile kroków i pomiarów
 STEP_SIZE_M = 0.00018  # rozmiar kroku w metrach (0.18mm)
 
 # ----------- ESP 32 handling -----------
@@ -122,37 +122,95 @@ def plot_measurement_analysis(measurements_data, freq_hz=10.3943359375e9):
     ch0_phase_all = np.angle(all_ch0)
     ch1_phase_all = np.angle(all_ch1)
     
+    # WYKRES 1: Przegląd wszystkich sygnałów - ZOPTYMALIZOWANY
+    # fig1, axes = plt.subplots(2, 2, figsizaxes[0, 0].plot(t_all, ch0_real_all, 'b-', label='Kanał 0 - Re', alpha=0.7, linewidth=0.5)
+    # axes[0, 0].plot(t_all, ch0_imag_all, 'b--', label='Kanał 0 - Im', alpha=0.7, linewidth=0.5)
+    # axes[0, 0].plot(t_all, ch1_real_all, 'r-', label='Kanał 1 - Re', alpha=0.7, linewidth=0.5)
+    # axes[0, 0].plot(t_all, ch1_imag_all, 'r--', label='Kanał 1 - Im', alpha=0.7, linewidth=0.5)
+    # axes[0, 0].set_xlabel('Czas [μs]')
+    # axes[0, 0].set_ylabel('Amplituda')
+    # axes[0, 0].set_title('Części rzeczywiste i urojone sygnałów')
+    # axes[0, 0].legend(loc='upper right')  # Konkretna lokalizacja zamiast 'best'
+    # axes[0, 0].grid(True, alpha=0.3)
+    
+    # # Amplitudy
+    # axes[0, 1].plot(t_all, ch0_mag_all, 'b-', label='Kanał 0', alpha=0.8, linewidth=0.8)
+    # axes[0, 1].plot(t_all, ch1_mag_all, 'r-', label='Kanał 1', alpha=0.8, linewidth=0.8)
+    # axes[0, 1].set_xlabel('Czas [μs]')
+    # axes[0, 1].set_ylabel('Amplituda')
+    # axes[0, 1].set_title('Amplitudy sygnałów')
+    # axes[0, 1].legend(loc='upper right')
+    # axes[0, 1].grid(True, alpha=0.3)
+    
+    # # Fazy
+    # axes[1, 0].plot(t_all, np.rad2deg(ch0_phase_all), 'b-', label='Kanał 0', alpha=0.8, linewidth=0.8)
+    # axes[1, 0].plot(t_all, np.rad2deg(ch1_phase_all), 'r-', label='Kanał 1', alpha=0.8, linewidth=0.8)
+    # axes[1, 0].set_xlabel('Czas [μs]')
+    # axes[1, 0].set_ylabel('Faza [°]')
+    # axes[1, 0].set_title('Fazy sygnałów')
+    # axes[1, 0].legend(loc='upper right')
+    # axes[1, 0].grid(True, alpha=0.3)
+    
+    # # Różnica faz
+    # phase_diff_all = np.angle(all_ch0 * np.conj(all_ch1))
+    # axes[1, 1].plot(t_all, np.rad2deg(phase_diff_all), 'g-', alpha=0.8, linewidth=0.8)
+    # axes[1, 1].axhline(y=np.rad2deg(np.mean(phase_diff_all)), color='red', linestyle='--', 
+    #                   label=f'Średnia: {np.rad2deg(np.mean(phase_diff_all)):.1f}°')
+    # axes[1, 1].set_xlabel('Czas [μs]')
+    # axes[1, 1].set_ylabel('Różnica faz [°]')
+    # axes[1, 1].set_title('Różnica faz między kanałami')
+    # axes[1, 1].legend(loc='upper right')
+    # axes[1, 1].grid(True, alpha=0.3)
+    
+    # plt.tight_layout()
+    # # plt.show()e=(15, 10))
+    # fig1.suptitle(f'Analiza pomiarów SAR (Średni kąt: {mean_angle:.1f}° ± {std_angle:.1f}°)\n' + 
+    #               f'Pokazano {len(selected_ch0)}/{len(measurements_data["ch0"])} pomiarów (downsampled)', fontsize=14)
+    
+    # Części rzeczywiste i urojone - z mniejszą ilością danych
+    # axes[0, 0].plot(t_all, ch0_real_all, 'b-', label='Kanał 0 - Re', alpha=0.7, linewidth=0.5)
+    # axes[0, 0].plot(t_all, ch0_imag_all, 'b--', label='Kanał 0 - Im', alpha=0.7, linewidth=0.5)
+    # axes[0, 0].plot(t_all, ch1_real_all, 'r-', label='Kanał 1 - Re', alpha=0.7, linewidth=0.5)
+    # axes[0, 0].plot(t_all, ch1_imag_all, 'r--', label='Kanał 1 - Im', alpha=0.7, linewidth=0.5)
+    # axes[0, 0].set_xlabel('Czas [μs]')
+    # axes[0, 0].set_ylabel('Amplituda')
+    # axes[0, 0].set_title('Części rzeczywiste i urojone sygnałów')
+    # axes[0, 0].legend(loc='upper right')  # Konkretna lokalizacja zamiast 'best'
+    # axes[0, 0].grid(True, alpha=0.3)
+    
+    # # Amplitudy
+    # axes[0, 1].plot(t_all, ch0_mag_all, 'b-', label='Kanał 0', alpha=0.8, linewidth=0.8)
+    # axes[0, 1].plot(t_all, ch1_mag_all, 'r-', label='Kanał 1', alpha=0.8, linewidth=0.8)
+    # axes[0, 1].set_xlabel('Czas [μs]')
+    # axes[0, 1].set_ylabel('Amplituda')
+    # axes[0, 1].set_title('Amplitudy sygnałów')
+    # axes[0, 1].legend(loc='upper right')
+    # axes[0, 1].grid(True, alpha=0.3)
+    
+    # # Fazy
+    # axes[1, 0].plot(t_all, np.rad2deg(ch0_phase_all), 'b-', label='Kanał 0', alpha=0.8, linewidth=0.8)
+    # axes[1, 0].plot(t_all, np.rad2deg(ch1_phase_all), 'r-', label='Kanał 1', alpha=0.8, linewidth=0.8)
+    # axes[1, 0].set_xlabel('Czas [μs]')
+    # axes[1, 0].set_ylabel('Faza [°]')
+    # axes[1, 0].set_title('Fazy sygnałów')
+    # axes[1, 0].legend(loc='upper right')
+    # axes[1, 0].grid(True, alpha=0.3)
+    
+    # # Różnica faz
+    # phase_diff_all = np.angle(all_ch0 * np.conj(all_ch1))
+    # axes[1, 1].plot(t_all, np.rad2deg(phase_diff_all), 'g-', alpha=0.8, linewidth=0.8)
+    # axes[1, 1].axhline(y=np.rad2deg(np.mean(phase_diff_all)), color='red', linestyle='--', 
+    #                   label=f'Średnia: {np.rad2deg(np.mean(phase_diff_all)):.1f}°')
+    # axes[1, 1].set_xlabel('Czas [μs]')
+    # axes[1, 1].set_ylabel('Różnica faz [°]')
+    # axes[1, 1].set_title('Różnica faz między kanałami')
+    # axes[1, 1].legend(loc='upper right')
+    # axes[1, 1].grid(True, alpha=0.3)
+    
+    # plt.tight_layout()
+    # # plt.show()
+    
     print(f"[INFO] Wykresy wygenerowane (użyto {len(all_ch0)} próbek z {len(np.concatenate(measurements_data['ch0']))} dostępnych)")
-
-def range_compression(received_signal, chirp_signal, fs):
-    """
-    Wykonuje kompresję zasięgu na sygnale odebranym
-    używając dopasowanego filtra (matched filter).
-    
-    Args:
-        received_signal (np.array): Surowy sygnał I/Q z odbiornika.
-        chirp_signal (np.array): Generowany sygnał chirp (referencyjny).
-        fs (int): Częstotliwość próbkowania.
-        
-    Returns:
-        np.array: Skompresowany sygnał zasięgu.
-    """
-    N = len(received_signal)
-    
-    # 1. Transformacja do domeny częstotliwości
-    rec_fft = np.fft.fft(received_signal, n=N)
-    chirp_fft = np.fft.fft(chirp_signal, n=N)
-    
-    # 2. Matched filter w domenie częstotliwości
-    matched_filter = np.conj(chirp_fft)
-    
-    # 3. Mnożenie sygnałów
-    compressed_fft = rec_fft * matched_filter
-    
-    # 4. Transformacja z powrotem do domeny czasu/zasięgu
-    compressed_signal = np.fft.ifft(compressed_fft)
-    
-    return compressed_signal
 
 def MLE_sar_full_aperture_dual(Y, element_positions_mm, freq_hz, verbose=False):
     """
@@ -319,6 +377,54 @@ def setup_chirp_radar(sdr, phaser):
     
     return chirp_signal
 
+# def start_chirp_transmission(sdr, chirp_signal):
+#     """
+#     Rozpoczyna nadawanie chirp z dynamicznym zwiększaniem mocy co 10s
+#     """
+#     print("[INFO] Rozpoczynam nadawanie chirp z kontrolą mocy...")
+
+#     tx_buffer = np.tile(chirp_signal, 10)
+#     enabled_tx_channels = len(sdr.tx_enabled_channels)
+
+#     sdr._ctx.set_timeout(30000)
+
+#     # Konfiguracja - domyślnie słaby sygnał
+#     normal_tx_gain_ch0 = -88
+#     normal_tx_gain_ch1 = -20
+#     strong_tx_gain_ch0 = -40
+#     strong_tx_gain_ch1 = 0
+
+#     sdr.tx_cyclic_buffer = True
+
+#     try:
+#         last_strong_signal_time = time.time()
+#         strong_signal_interval = 10.0
+#         strong_signal_duration = 2.0
+
+#         while True:
+#             now = time.time()
+#             elapsed = now - last_strong_signal_time
+
+#             if elapsed >= strong_signal_interval:
+#                 print("[TX] Wysyłam MOCNY sygnał przez 2s...")
+#                 sdr.tx_hardwaregain_chan0 = strong_tx_gain_ch0
+#                 sdr.tx_hardwaregain_chan1 = strong_tx_gain_ch1
+#                 sdr.tx([tx_buffer, np.zeros_like(tx_buffer)])
+#                 time.sleep(strong_signal_duration)
+#                 last_strong_signal_time = time.time()
+#                 print("[TX] Powrót do normalnego nadawania...")
+#                 sdr.tx_hardwaregain_chan0 = normal_tx_gain_ch0
+#                 sdr.tx_hardwaregain_chan1 = normal_tx_gain_ch1
+#             else:
+#                 # Zwykłe nadawanie w tle (jeśli potrzeba)
+#                 sdr.tx([tx_buffer, np.zeros_like(tx_buffer)])
+#                 time.sleep(0.5)
+
+#     except KeyboardInterrupt:
+#         print("[INFO] Przerwano transmisję chirp.")
+#     except Exception as e:
+#         print(f"[ERROR] Błąd podczas transmisji: {e}")
+
 def plot_sar_progress(measurements_data, positions, angles_basic, angles_mle=None):
     """
     Wykres postępu pomiarów SAR w czasie rzeczywistym
@@ -366,66 +472,7 @@ def plot_sar_progress(measurements_data, positions, angles_basic, angles_mle=Non
     plt.tight_layout()
     plt.show()
 
-def backprojection(measurements_data, freq_hz, image_size_m=1.0, resolution_m=0.01):
-    """
-    Wykonuje SAR imaging za pomocą zoptymalizowanej metody Backprojection.
-    Wykorzystuje interpolację, aby uniknąć pętli po każdym pikselu.
-    """
-    print("[INFO] Rozpoczynam SAR imaging (zoptymalizowany Backprojection)...")
-    
-    c = 3e8  # prędkość światła
-    lambda_m = c / freq_hz  # długość fali
-    
-    # 1. Definicja przestrzeni obrazu
-    x_coords = np.arange(-image_size_m/2, image_size_m/2, resolution_m)
-    y_coords = np.arange(0.1, image_size_m, resolution_m)
-    
-    # 2. Przygotowanie danych
-    aperture_positions = np.array(measurements_data['positions'])
-    measurements = np.array(measurements_data['ch0'])
-    sample_rate = measurements_data['fs']
-    
-    # Przeliczenie indeksów próbek na odległości
-    time_bins = np.arange(measurements.shape[1]) / sample_rate
-    range_bins = time_bins * c / 2
-    
-    # 3. Inicjalizacja obrazu
-    image_plane = np.zeros((len(y_coords), len(x_coords)), dtype=np.complex128)
-    
-    # 4. Pętla tylko po pozycjach apertury (znacznie szybsza)
-    for i, x_pos in enumerate(aperture_positions):
-        measurement_vector = measurements[i, :]
-        
-        # Oblicz odległość do każdego piksela w obrazie
-        # Użycie meshgrid pozwala na obliczenia macierzowe
-        X_grid, Y_grid = np.meshgrid(x_coords, y_coords)
-        
-        # Obliczenia wektorowe odległości od radaru do każdego piksela
-        dist_grid = np.sqrt((X_grid - x_pos)**2 + Y_grid**2)
-        
-        # Oblicz odległość okrężną (round trip)
-        round_trip_distance = 2 * dist_grid
-        
-        # Interpolacja: odczytanie wartości z wektora pomiarowego dla każdej odległości
-        # Funkcja `np.interp` jest kluczem do optymalizacji.
-        # Jest to o wiele szybsze niż pętla po pikselach.
-        pixel_contribution_interpolated = np.interp(
-            round_trip_distance, range_bins, measurement_vector.real
-        ) + 1j * np.interp(
-            round_trip_distance, range_bins, measurement_vector.imag
-        )
-        
-        # Obliczanie korekcji fazowej dla całej siatki pikseli
-        phase_correction = np.exp(1j * 2 * np.pi * round_trip_distance / lambda_m)
-        
-        # Dodanie skorygowanego wkładu do obrazu
-        image_plane += pixel_contribution_interpolated * phase_correction
-        
-    # 5. Przetwarzanie końcowe i wizualizacja (jak w oryginalnym kodzie)
-    image = np.abs(image_plane)
-    image_normalized = 20 * np.log10(image / np.max(image))
-    
-    return image_normalized, x_coords, y_coords
+import threading
 
 def start_chirp_transmission(sdr, chirp_signal):
     """
@@ -584,19 +631,15 @@ def run_sar_measurements(phaser, sdr, chirp_signal):
 
         # Pobierz dane z radaru
         ch0, ch1 = acquire_data(sdr)
-
-        # 1. Wykonaj kompresję zasięgu na surowych danych
-        compressed_ch0 = range_compression(ch0, chirp_signal, sdr.sample_rate)
-        compressed_ch1 = range_compression(ch1, chirp_signal, sdr.sample_rate)
-
-        # 2. Zapisz skompresowane dane zamiast surowych
-        measurements_data['ch0'].append(compressed_ch0)
-        measurements_data['ch1'].append(compressed_ch1)
-        measurements_data['positions'].append(current_position)
         
         # Powrót do niskiej mocy
         sdr.tx_hardwaregain_chan0 = normal_tx_gain_ch0
         sdr.tx_hardwaregain_chan1 = normal_tx_gain_ch1
+        
+        # Zapisz dane do struktur
+        measurements_data['ch0'].append(ch0)
+        measurements_data['ch1'].append(ch1)
+        measurements_data['positions'].append(current_position)
         
         # Oblicz kąt podstawową metodą
         angle_basic, phase_diff, correlation = analyze_angle_estimation(ch0, ch1, phaser.SignalFreq, sdr.sample_rate)
@@ -625,28 +668,6 @@ def run_sar_measurements(phaser, sdr, chirp_signal):
     if angle_sar_aperture_dual is not None:
         print(f"[WYNIKI] MLE SAR (syntetyczna apertura, 2 kanały): {angle_sar_aperture_dual:.2f}°")
     
-    if len(measurements_data['ch0']) >= 2:
-        print("\n" + "="*50)
-        print("SAR IMAGING")
-        print("="*50)
-        
-        sar_image, x_coords, y_coords = backprojection(
-            measurements_data, 
-            phaser.SignalFreq,
-            image_size_m=1.0,  # Zmień, jeśli potrzebujesz większego/mniejszego obszaru
-            resolution_m=0.005 # Zmień, jeśli potrzebujesz większej/mniejszej rozdzielczości
-        )
-        
-        # Wyświetl obraz SAR
-        plt.figure(figsize=(8, 8))
-        plt.imshow(sar_image, cmap='gray', extent=[x_coords.min(), x_coords.max(), y_coords.min(), y_coords.max()], origin='lower')
-        plt.title('Obraz SAR (Backprojection)')
-        plt.xlabel('Pozycja wzdłuż apertury [m]')
-        plt.ylabel('Odległość od radaru [m]')
-        plt.colorbar(label='Amplituda [dB]')
-        plt.grid(True, linestyle='--', alpha=0.5)
-        plt.show()
-
     # Podsumowanie wyników z uwzględnieniem geometrii SAR
     mean_basic_angle = np.mean(measurements_data['basic_angles'])
     std_basic_angle = np.std(measurements_data['basic_angles'])
