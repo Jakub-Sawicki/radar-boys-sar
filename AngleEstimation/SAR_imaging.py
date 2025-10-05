@@ -11,7 +11,7 @@ import threading
 ESP32_IP = "192.168.0.103"
 ESP32_PORT = 3333
 MEASUREMENTS = 200     # ile kroków i pomiarów
-STEP_SIZE_M = 0.00018  # rozmiar kroku w metrach (0.18mm)
+STEP_SIZE_M = 0.00018  # rozmiar kroku w metrach
 
 # ----------- ESP 32 handling -----------
 
@@ -41,26 +41,22 @@ def acquire_data(sdr):
 def analyze_angle_estimation(data_ch0, data_ch1, freq_hz=10.3943359375e9, sample_rate=30e6):
     """
     Podstawowa estymacja kąta przylotu sygnału używając różnicy fazowej
-    UWAGA: Ta metoda zakłada stacjonarne anteny - nie uwzględnia ruchu platformy!
     """
-    c = 3e8  # prędkość światła
-    lambda_m = c / freq_hz  # długość fali w metrach
-    d_m = 0.02424  # rozstaw anten w metrach (24.24mm)
+    c = 3e8  
+    lambda_m = c / freq_hz
+    d_m = 0.02424  # rozstaw anten w metrach
     d_over_lambda = d_m / lambda_m  # normalizowany rozstaw
     
-    # Oblicz korelację między kanałami
     correlation = np.mean(data_ch0 * np.conj(data_ch1))
 
-    # Kalibracja fazowa - może wymagać dostrojenia dla ruchomej platformy
     calibrated_correlation = correlation * np.exp(-1j * np.deg2rad(90))
     
-    # Różnica fazowa między kanałami
     phase_diff = np.angle(calibrated_correlation)
     
-    # Estymacja kąta na podstawie różnicy fazowej (klasyczna formula DOA)
+    # Estymacja kąta na podstawie różnicy fazowej 
     sin_theta = phase_diff / (2 * np.pi * d_over_lambda)
     
-    # Sprawdź czy wartość jest w zakresie [-1, 1]
+    # Sprawdzanie czy wartość jest w zakresie [-1, 1]
     if abs(sin_theta) > 1:
         sin_theta = np.clip(sin_theta, -1, 1)
     
@@ -71,35 +67,32 @@ def analyze_angle_estimation(data_ch0, data_ch1, freq_hz=10.3943359375e9, sample
 
 def a_sar(angle_deg, element_positions_mm, lambda_mm):
     """
-    Steering vector dla SAR (odpowiednik a_sar z MATLAB)
+    Steering vector dla SAR
     """
     angle_rad = np.deg2rad(angle_deg)
     k = 2 * np.pi / lambda_mm
-    # Steering vector: exp(j * k * d * sin(theta))
     return np.exp(1j * k * element_positions_mm * np.sin(angle_rad)).reshape(-1, 1)
 
 def plot_measurement_analysis(measurements_data, freq_hz=10.3943359375e9):
     """
-    Generuje wykresy analizy wszystkich zebranych pomiarów - ZOPTYMALIZOWANE
+    Generuje wykresy analizy wszystkich zebranych pomiarów 
     """
     print("[INFO] Generowanie wykresów analizy...")
     
-    # Ogranicz dane do analizy - weź co N-tą próbkę dla szybkości
-    downsample_factor = max(1, len(measurements_data['ch0']) // 20)  # Max 20 pomiarów na wykresie
+    downsample_factor = max(1, len(measurements_data['ch0']) // 20) 
     sample_indices = range(0, len(measurements_data['ch0']), downsample_factor)
     
-    # Połącz wybrane dane z pomiarów
     selected_ch0 = [measurements_data['ch0'][i] for i in sample_indices]
     selected_ch1 = [measurements_data['ch1'][i] for i in sample_indices]
     
-    # Jeszcze bardziej ogranicz próbki w czasie - weź co 10-tą próbkę z każdego pomiaru
+    # Ograniczanie próbek w czasie
     time_downsample = 10
     all_ch0 = np.concatenate([ch0[::time_downsample] for ch0 in selected_ch0])
     all_ch1 = np.concatenate([ch1[::time_downsample] for ch1 in selected_ch1])
     
     sample_rate = measurements_data['fs']
     
-    # Oblicz średni kąt z wszystkich pomiarów
+    # Obliczanie średniego kąta z wszystkich pomiarów
     angles = []
     for ch0, ch1 in zip(measurements_data['ch0'], measurements_data['ch1']):
         angle, _, _ = analyze_angle_estimation(ch0, ch1, freq_hz, sample_rate)
@@ -108,11 +101,9 @@ def plot_measurement_analysis(measurements_data, freq_hz=10.3943359375e9):
     mean_angle = np.mean(angles)
     std_angle = np.std(angles)
     
-    # Oblicz oś czasu dla ograniczonych danych
-    dt = 1 / sample_rate * time_downsample  # Uwzględnij downsampling
+    dt = 1 / sample_rate * time_downsample 
     t_all = np.arange(len(all_ch0)) * dt * 1e6  # czas w μs
     
-    # Przygotuj dane do wyświetlenia
     ch0_real_all = np.real(all_ch0)
     ch0_imag_all = np.imag(all_ch0)
     ch1_real_all = np.real(all_ch1)
@@ -122,66 +113,49 @@ def plot_measurement_analysis(measurements_data, freq_hz=10.3943359375e9):
     ch0_phase_all = np.angle(all_ch0)
     ch1_phase_all = np.angle(all_ch1)
     
-    print(f"[INFO] Wykresy wygenerowane (użyto {len(all_ch0)} próbek z {len(np.concatenate(measurements_data['ch0']))} dostępnych)")
+    print(f"[INFO] Wygenerowane wykresy (użyto {len(all_ch0)} próbek z {len(np.concatenate(measurements_data['ch0']))} dostępnych)")
 
 def range_compression(received_signal, chirp_signal, fs):
     """
     Wykonuje kompresję zasięgu na sygnale odebranym
     używając dopasowanego filtra (matched filter).
-    
-    Args:
-        received_signal (np.array): Surowy sygnał I/Q z odbiornika.
-        chirp_signal (np.array): Generowany sygnał chirp (referencyjny).
-        fs (int): Częstotliwość próbkowania.
-        
-    Returns:
-        np.array: Skompresowany sygnał zasięgu.
     """
     N = len(received_signal)
     
-    # 1. Transformacja do domeny częstotliwości
     rec_fft = np.fft.fft(received_signal, n=N)
     chirp_fft = np.fft.fft(chirp_signal, n=N)
     
-    # 2. Matched filter w domenie częstotliwości
     matched_filter = np.conj(chirp_fft)
     
-    # 3. Mnożenie sygnałów
     compressed_fft = rec_fft * matched_filter
     
-    # 4. Transformacja z powrotem do domeny czasu/zasięgu
     compressed_signal = np.fft.ifft(compressed_fft)
     
     return compressed_signal
 
 def MLE_sar_full_aperture_dual(Y, element_positions_mm, freq_hz, verbose=False):
     """
-    MLE estymacja kąta z danych ze wszystkich pozycji (syntetyczna apertura z dwóch kanałów)
-    Y - macierz danych (M x N), gdzie M to liczba "wirtualnych anten" (2 kanały * liczba pozycji)
-    element_positions_mm - pozycje w mm (M-elementowy wektor)
+    MLE estymacja kąta z danych ze wszystkich pozycji
     """
     M, N = Y.shape
     R = (Y @ Y.conj().T) / N
     lambda_mm = 3e8 / freq_hz * 1e3
 
-    ch0_idx = np.arange(0, M, 2)  # Indeksy lewych anten
-    ch1_idx = np.arange(1, M, 2)  # Indeksy prawych anten
+    ch0_idx = np.arange(0, M, 2)
+    ch1_idx = np.arange(1, M, 2) 
 
-    # Podziel dane i pozycje na dwa kanały
     Y_left = Y[ch0_idx, :]
     Y_right = Y[ch1_idx, :]
 
     positions_left = element_positions_mm[ch0_idx]
     positions_right = element_positions_mm[ch1_idx]
 
-    # Połącz lewy i prawy kanał jako syntetyczna linia antenowa
-    Y_sorted = np.vstack((Y_left, Y_right))  # (M, N)
-    element_positions_sorted = np.concatenate((positions_left, positions_right))  # (M,)
+    Y_sorted = np.vstack((Y_left, Y_right))  
+    element_positions_sorted = np.concatenate((positions_left, positions_right))
 
-    # Używamy tych zreorganizowanych danych dalej
     Y = Y_sorted
     element_positions_mm = element_positions_sorted
-    M = Y.shape[0]  # zaktualizowana liczba elementów
+    M = Y.shape[0] 
 
     def cost_function(angle_deg):
         a_temp = a_sar(angle_deg, element_positions_mm, lambda_mm)
@@ -212,17 +186,15 @@ def MLE_sar_full_aperture_dual(Y, element_positions_mm, freq_hz, verbose=False):
 def analyze_mle_with_aperture_dual(measurements_data, freq_hz, verbose=True):
     """
     Analiza MLE z wykorzystaniem danych z obu kanałów i wszystkich pozycji
-    (syntetyczna apertura + 2 anteny)
     """
     try:
-        M = len(measurements_data['ch0'])  # liczba pozycji
-        N = len(measurements_data['ch0'][0])  # liczba próbek
+        M = len(measurements_data['ch0'])  
+        N = len(measurements_data['ch0'][0])
 
         # Kalibracja fazowa kanału 1
         calibration_phase_deg = 90
         calibration_factor = np.exp(1j * np.deg2rad(calibration_phase_deg))
 
-        # Przygotuj dane Y (2M x N)
         ch0_stack = []
         ch1_stack = []
         positions_mm = []
@@ -233,28 +205,26 @@ def analyze_mle_with_aperture_dual(measurements_data, freq_hz, verbose=True):
             ch0_stack.append(ch0)
             ch1_stack.append(ch1)
 
-            pos_mm = measurements_data['positions'][i] * 1000  # m → mm
-            positions_mm.extend([pos_mm, pos_mm + 24.24])  # pozycja anteny 0 i 1
+            pos_mm = measurements_data['positions'][i] * 1000
+            positions_mm.extend([pos_mm, pos_mm + 24.24])
 
-        Y = np.vstack(ch0_stack + ch1_stack)  # shape: (2M, N)
-        element_positions_mm = np.array(positions_mm)  # shape: (2M,)
+        Y = np.vstack(ch0_stack + ch1_stack)
+        element_positions_mm = np.array(positions_mm)
 
-        # Estymacja kąta
         estimated_angle = MLE_sar_full_aperture_dual(Y, element_positions_mm, freq_hz, verbose=verbose)
         print(f"[WYNIK] Kąt DOA z syntetycznej apertury (2 kanały): {estimated_angle:.2f}°")
         return estimated_angle
     except Exception as e:
-        print(f"[ERROR] Błąd podczas analizy MLE z 2-kanałowej syntetycznej apertury: {e}")
+        print(f"[ERROR] Błąd podczas analizy MLE: {e}")
         return None
 
 def generate_chirp_signal(sample_rate, duration_us=100, bandwidth_mhz=10, center_freq_mhz=1):
     """
-    Generuje sygnał chirp dla radaru
+    Generuj sygnał chirp dla radaru
     """
     duration_s = duration_us * 1e-6
     N = int(sample_rate * duration_s)
     
-    # Zapewnij, że N jest potęgą 2 dla lepszej wydajności
     N = 2**int(np.log2(N))
     print(f"[DEBUG] Długość sygnału chirp: {N} próbek ({N/sample_rate*1e6:.1f} μs)")
     
@@ -273,49 +243,35 @@ def generate_chirp_signal(sample_rate, duration_us=100, bandwidth_mhz=10, center
     chirp_signal = chirp_signal * (2**13)
     chirp_signal = chirp_signal.astype(np.complex64)
     
-    print(f"[DEBUG] Typ danych chirp: {chirp_signal.dtype}")
-    print(f"[DEBUG] Kształt sygnału chirp: {chirp_signal.shape}")
-    
     return chirp_signal, t
 
 def setup_chirp_radar(sdr, phaser):
     """
     Konfiguruje radar do pracy z sygnałami chirp
     """
-    print("[INFO] Konfigurowanie radaru chirp...")
+    print("[INFO] Konfigurowanie radaru chirp")
     
-    # Parametry chirp
     sample_rate = sdr.sample_rate
-    chirp_duration_us = 100  # 100 μs chirp
-    chirp_bandwidth_mhz = 5  # 5 MHz bandwidth
-    chirp_center_freq_mhz = 1  # 1 MHz center frequency
+    chirp_duration_us = 40
+    chirp_bandwidth_mhz = 15
+    chirp_center_freq_mhz = 10394
     
-    # Generuj sygnał chirp
     chirp_signal, t_chirp = generate_chirp_signal(
         sample_rate, chirp_duration_us, chirp_bandwidth_mhz, chirp_center_freq_mhz
     )
     
-    # Konfiguracja nadajnika - UPROSZCZONA
-    sdr.tx_enabled_channels = [0, 1]  # Tylko kanał 0
+    sdr.tx_enabled_channels = [0, 1]
     sdr.tx_cyclic_buffer = True
-    sdr.tx_hardwaregain_chan0 = -88  # Dostosuj moc dla bezpiecznej pracy
+    sdr.tx_hardwaregain_chan0 = -88
     sdr.tx_hardwaregain_chan1 = 0  
-    sdr.tx_lo = sdr.rx_lo  # Synchronizacja LO
+    sdr.tx_lo = sdr.rx_lo
 
     phaser.tx_trig_en = 0 
     phaser.enable = 0  
     
-    # Konfiguracja phasera dla nadawania
-    phaser._gpios.gpio_tx_sw = 0  # TX_OUT_2
-    phaser._gpios.gpio_vctrl_1 = 1  # Użyj wbudowanego PLL
-    phaser._gpios.gpio_vctrl_2 = 1  # Wyślij LO do obwodu Tx
-    
-    print(f"[INFO] Chirp radar skonfigurowany:")
-    print(f"  - Czas trwania chirp: {chirp_duration_us} μs")
-    print(f"  - Szerokość pasma: {chirp_bandwidth_mhz} MHz")
-    print(f"  - Częstotliwość środkowa: {chirp_center_freq_mhz} MHz")
-    print(f"  - Moc Tx: {sdr.tx_hardwaregain_chan0} dBm")
-    print(f"  - Włączone kanały Tx: {sdr.tx_enabled_channels}")
+    phaser._gpios.gpio_tx_sw = 0  # TX_OUT_1
+    phaser._gpios.gpio_vctrl_1 = 1
+    phaser._gpios.gpio_vctrl_2 = 1
     
     return chirp_signal
 
@@ -325,7 +281,6 @@ def plot_sar_progress(measurements_data, positions, angles_basic, angles_mle=Non
     """
     plt.figure(figsize=(15, 5))
     
-    # Pozycje vs kąty
     plt.subplot(1, 3, 1)
     positions_cm = np.array(positions) * 100
     plt.plot(positions_cm, angles_basic, 'bo-', label='Kąt podstawowy', markersize=4)
@@ -337,7 +292,6 @@ def plot_sar_progress(measurements_data, positions, angles_basic, angles_mle=Non
     plt.legend()
     plt.grid(True, alpha=0.3)
     
-    # Moc sygnału
     plt.subplot(1, 3, 2)
     if len(measurements_data['ch0']) > 0:
         powers_ch0 = [np.mean(np.abs(ch0)**2) for ch0 in measurements_data['ch0']]
@@ -350,7 +304,6 @@ def plot_sar_progress(measurements_data, positions, angles_basic, angles_mle=Non
         plt.legend()
         plt.grid(True, alpha=0.3)
     
-    # Różnica faz
     plt.subplot(1, 3, 3)
     if len(measurements_data['ch0']) > 0:
         phase_diffs = []
@@ -371,16 +324,14 @@ def backprojection(measurements_data, freq_hz, image_size_m=1.0, resolution_m=0.
     Wykonuje SAR imaging za pomocą zoptymalizowanej metody Backprojection.
     Wykorzystuje interpolację, aby uniknąć pętli po każdym pikselu.
     """
-    print("[INFO] Rozpoczynam SAR imaging (zoptymalizowany Backprojection)...")
+    print("[INFO] Rozpoczynam SAR imaging")
     
-    c = 3e8  # prędkość światła
-    lambda_m = c / freq_hz  # długość fali
+    c = 3e8
+    lambda_m = c / freq_hz
     
-    # 1. Definicja przestrzeni obrazu
     x_coords = np.arange(-image_size_m/2, image_size_m/2, resolution_m)
     y_coords = np.arange(0.1, image_size_m, resolution_m)
     
-    # 2. Przygotowanie danych
     aperture_positions = np.array(measurements_data['positions'])
     measurements = np.array(measurements_data['ch0'])
     sample_rate = measurements_data['fs']
@@ -389,39 +340,27 @@ def backprojection(measurements_data, freq_hz, image_size_m=1.0, resolution_m=0.
     time_bins = np.arange(measurements.shape[1]) / sample_rate
     range_bins = time_bins * c / 2
     
-    # 3. Inicjalizacja obrazu
     image_plane = np.zeros((len(y_coords), len(x_coords)), dtype=np.complex128)
     
-    # 4. Pętla tylko po pozycjach apertury (znacznie szybsza)
     for i, x_pos in enumerate(aperture_positions):
         measurement_vector = measurements[i, :]
         
-        # Oblicz odległość do każdego piksela w obrazie
-        # Użycie meshgrid pozwala na obliczenia macierzowe
         X_grid, Y_grid = np.meshgrid(x_coords, y_coords)
         
-        # Obliczenia wektorowe odległości od radaru do każdego piksela
         dist_grid = np.sqrt((X_grid - x_pos)**2 + Y_grid**2)
         
-        # Oblicz odległość okrężną (round trip)
         round_trip_distance = 2 * dist_grid
         
-        # Interpolacja: odczytanie wartości z wektora pomiarowego dla każdej odległości
-        # Funkcja `np.interp` jest kluczem do optymalizacji.
-        # Jest to o wiele szybsze niż pętla po pikselach.
         pixel_contribution_interpolated = np.interp(
             round_trip_distance, range_bins, measurement_vector.real
         ) + 1j * np.interp(
             round_trip_distance, range_bins, measurement_vector.imag
         )
         
-        # Obliczanie korekcji fazowej dla całej siatki pikseli
         phase_correction = np.exp(1j * 2 * np.pi * round_trip_distance / lambda_m)
         
-        # Dodanie skorygowanego wkładu do obrazu
         image_plane += pixel_contribution_interpolated * phase_correction
         
-    # 5. Przetwarzanie końcowe i wizualizacja (jak w oryginalnym kodzie)
     image = np.abs(image_plane)
     image_normalized = 20 * np.log10(image / np.max(image))
     
@@ -435,7 +374,6 @@ def start_chirp_transmission(sdr, chirp_signal):
 
     tx_buffer = np.tile(chirp_signal, 10)
 
-    # Ustawienia mocy
     normal_tx_gain_ch0 = -88
     normal_tx_gain_ch1 = -20
 
@@ -443,16 +381,11 @@ def start_chirp_transmission(sdr, chirp_signal):
     sdr.tx_hardwaregain_chan0 = normal_tx_gain_ch0
     sdr.tx_hardwaregain_chan1 = normal_tx_gain_ch1
 
-    # Start cyklicznego nadawania
     sdr.tx([tx_buffer, np.zeros_like(tx_buffer)])
 
-# Funkcja `pulse_gain` jest już niepotrzebna, ponieważ
-# sterowanie mocą będzie w głównej pętli.
-
 def main():
-    # Połączenie z urządzeniami
     try:
-        print("[INFO] Próba połączenia z CN0566...")
+        print("[INFO] Próba połączenia z CN0566")
         phaser = CN0566(uri="ip:phaser.local")
         sdr = ad9361(uri="ip:phaser.local:50901")
     except:
@@ -462,7 +395,6 @@ def main():
     
     phaser.sdr = sdr
     
-    # Konfiguracja urządzeń (twoja oryginalna konfiguracja)
     time.sleep(0.5)
     phaser.configure(device_mode="rx")
     sdr._ctrl.debug_attrs["adi,frequency-division-duplex-mode-enable"].value = "1"
@@ -474,7 +406,6 @@ def main():
     rx = sdr._ctrl.find_channel("voltage0")
     rx.attrs["quadrature_tracking_en"].value = "1"
     
-    # Parametry próbkowania (twoje oryginalne)
     sdr.sample_rate = int(30e6)
     sdr.rx_buffer_size = int(4 * 1024)
     sdr.rx_rf_bandwidth = int(10e6)
@@ -485,11 +416,9 @@ def main():
     sdr.rx_lo = int(2.0e9)
     sdr.filter = "LTE20_MHz.ftr"
     
-    # Konfiguracja phasera (twoja oryginalna)
     phaser.SignalFreq = 10.3943359375e9
     phaser.lo = int(phaser.SignalFreq) + sdr.rx_lo
     
-    # Ustawienie wzmocnienia na wszystkich 8 antenach
     gain_list = [64] * 8
     for i in range(len(gain_list)):
         phaser.set_chan_gain(i, gain_list[i], apply_cal=False)
@@ -497,21 +426,13 @@ def main():
     phaser.set_beam_phase_diff(0.0)
     phaser.Averages = 16
     
-    # Wyświetl parametry systemu
     c = 3e8
     lambda_m = c / phaser.SignalFreq
     d_m = 24.25e-3
     d_over_lambda = d_m / lambda_m
     
-    print(f"[INFO] Częstotliwość: {phaser.SignalFreq/1e9:.3f} GHz")
-    print(f"[INFO] Długość fali: {lambda_m*100:.2f} cm")
-    print(f"[INFO] Rozstaw anten: {d_m*100:.1f} cm")
-    print(f"[INFO] Rozmiar kroku: {STEP_SIZE_M*1000:.1f} mm")
-    print(f"[INFO] d/λ = {d_over_lambda:.3f}")
-    
     time.sleep(0.5)
     
-    # NOWA KONFIGURACJA: Chirp radar
     print("\n" + "="*50)
     print("KONFIGURACJA RADARU CHIRP")
     print("="*50)
@@ -519,30 +440,22 @@ def main():
     chirp_signal = setup_chirp_radar(sdr, phaser)
     threading.Thread(target=start_chirp_transmission, args=(sdr, chirp_signal), daemon=True).start()
 
-# reszta SAR / pomiary / przetwarzanie
-
-
-    # start_chirp_transmission(sdr, chirp_signal)
-    
     print("\n" + "="*50)
-    print("ROZPOCZYNAM POMIARY SAR")
+    print("POCZAEK POMIARU SAR")
     print("="*50)
     
-    # Uruchom pomiary SAR
     run_sar_measurements(phaser, sdr, chirp_signal)
-
 
 def run_sar_measurements(phaser, sdr, chirp_signal):
     """
     Pomiary SAR z aktywnym nadawaniem chirp.
     """
-    print("[INFO] Rozpoczynam pomiary SAR z aktywnym nadajnikiem...")
+    print("[INFO] Pomiary SAR")
     
     # Połączenie z ESP32
     sock = connect_esp32()
     time.sleep(1)
     
-    # Struktury danych dla nowych metod
     measurements_data = {
         'ch0': [],
         'ch1': [],
@@ -552,25 +465,16 @@ def run_sar_measurements(phaser, sdr, chirp_signal):
         'basic_angles': []
     }
     
-    print(f"\n[INFO] Rozpoczynam {MEASUREMENTS} pomiarów...")
+    print(f"\n[INFO] {MEASUREMENTS} pomiarów")
     
-    # Ustawienia mocy
     strong_tx_gain_ch0 = -40
     strong_tx_gain_ch1 = 0
     normal_tx_gain_ch0 = sdr.tx_hardwaregain_chan0
     normal_tx_gain_ch1 = sdr.tx_hardwaregain_chan1
-    
-    # Wyłącz tryb cykliczny, aby mieć pełną kontrolę nad nadawaniem
-    # UWAGA: W wersji uproszczonej, nadawanie jest cykliczne. Zmieniamy tylko moc.
-    # Ta linia nie jest już potrzebna, ponieważ start_chirp_transmission
-    # już uruchomił cykliczne nadawanie.
-    # sdr.tx_cyclic_buffer = False 
 
-    # Główna pętla pomiarowa
     for i in range(MEASUREMENTS):
         print(f"\n[{i+1}/{MEASUREMENTS}] Pomiar...")
         
-        # Wykonaj krok na ESP32 (jeśli nie jest to pierwszy pomiar)
         if i > 0:
             send_step_and_wait(sock)
             time.sleep(0.3)
@@ -582,14 +486,11 @@ def run_sar_measurements(phaser, sdr, chirp_signal):
         sdr.tx_hardwaregain_chan1 = strong_tx_gain_ch1
         time.sleep(0.05)  # Krótki czas na ustabilizowanie się wzmocnienia
 
-        # Pobierz dane z radaru
         ch0, ch1 = acquire_data(sdr)
 
-        # 1. Wykonaj kompresję zasięgu na surowych danych
         compressed_ch0 = range_compression(ch0, chirp_signal, sdr.sample_rate)
         compressed_ch1 = range_compression(ch1, chirp_signal, sdr.sample_rate)
 
-        # 2. Zapisz skompresowane dane zamiast surowych
         measurements_data['ch0'].append(compressed_ch0)
         measurements_data['ch1'].append(compressed_ch1)
         measurements_data['positions'].append(current_position)
@@ -598,11 +499,9 @@ def run_sar_measurements(phaser, sdr, chirp_signal):
         sdr.tx_hardwaregain_chan0 = normal_tx_gain_ch0
         sdr.tx_hardwaregain_chan1 = normal_tx_gain_ch1
         
-        # Oblicz kąt podstawową metodą
         angle_basic, phase_diff, correlation = analyze_angle_estimation(ch0, ch1, phaser.SignalFreq, sdr.sample_rate)
         measurements_data['basic_angles'].append(angle_basic)
         
-        # Sprawdź moc sygnału
         power_ch0 = np.mean(np.abs(ch0)**2)
         power_ch1 = np.mean(np.abs(ch1)**2)
         
@@ -615,15 +514,11 @@ def run_sar_measurements(phaser, sdr, chirp_signal):
         time.sleep(0.05)
     
     sock.close()
-    print("\n[INFO] Pomiary zakończone, rozpoczynam analizę...")
+    print("\n[INFO] Pomiary zakończone, analiza")
     
-    # Pokaż wykresy ze wszystkimi danymi
-    plot_measurement_analysis(measurements_data, phaser.SignalFreq)
-
-    print("\n[INFO] Analiza MLE SAR z syntetycznej apertury (kanały 0 i 1)...")
     angle_sar_aperture_dual = analyze_mle_with_aperture_dual(measurements_data, phaser.SignalFreq, verbose=True)
     if angle_sar_aperture_dual is not None:
-        print(f"[WYNIKI] MLE SAR (syntetyczna apertura, 2 kanały): {angle_sar_aperture_dual:.2f}°")
+        print(f"[WYNIKI] MLE SAR: {angle_sar_aperture_dual:.2f}°")
     
     if len(measurements_data['ch0']) >= 2:
         print("\n" + "="*50)
@@ -633,11 +528,10 @@ def run_sar_measurements(phaser, sdr, chirp_signal):
         sar_image, x_coords, y_coords = backprojection(
             measurements_data, 
             phaser.SignalFreq,
-            image_size_m=1.0,  # Zmień, jeśli potrzebujesz większego/mniejszego obszaru
-            resolution_m=0.005 # Zmień, jeśli potrzebujesz większej/mniejszej rozdzielczości
+            image_size_m=1.0,
+            resolution_m=0.005
         )
         
-        # Wyświetl obraz SAR
         plt.figure(figsize=(8, 8))
         plt.imshow(sar_image, cmap='gray', extent=[x_coords.min(), x_coords.max(), y_coords.min(), y_coords.max()], origin='lower')
         plt.title('Obraz SAR (Backprojection)')
@@ -647,7 +541,6 @@ def run_sar_measurements(phaser, sdr, chirp_signal):
         plt.grid(True, linestyle='--', alpha=0.5)
         plt.show()
 
-    # Podsumowanie wyników z uwzględnieniem geometrii SAR
     mean_basic_angle = np.mean(measurements_data['basic_angles'])
     std_basic_angle = np.std(measurements_data['basic_angles'])
     
@@ -658,24 +551,11 @@ def run_sar_measurements(phaser, sdr, chirp_signal):
     print(f"Zakres pozycji: 0 - {(len(measurements_data['ch0'])-1) * STEP_SIZE_M * 100:.1f} cm")
     print(f"Rozmiar kroku: {STEP_SIZE_M * 1000:.1f} mm")
     print("")
-    print("UWAGA O GEOMETRII SYSTEMU:")
-    print("- Nadajnik i odbiornik poruszają się razem (monostatyczny SAR)")
-    print("- Target: metalowa skrzynka w odległości ~50 cm")
-    print("- Kąty są mierzone względem platformy, nie względem targetu!")
-    print("")
     print("WYNIKI ESTYMACJI KĄTÓW:")
     print(f"Średni kąt (podstawowy): {mean_basic_angle:.1f}° ± {std_basic_angle:.1f}°")
     if angle_sar_aperture_dual is not None:
         print(f"Kąt MLE (syntetyczna apertura): {angle_sar_aperture_dual:.1f}°")
     print("")
-    print("INTERPRETACJA:")
-    if std_basic_angle > 10:
-        print("⚠ Duża zmienność kątów może wynikać z:")
-        print("  - Wielodrogowości sygnału (odbicia od różnych części targetu)")
-        print("  - Ruchu platformy (efekt Dopplera)")
-        print("  - Niedoskonałej kalibracji fazowej")
-    else:
-        print("✓ Stabilne wyniki kątowe - system działa poprawnie")
     print("="*50)
 
 if __name__ == "__main__":
