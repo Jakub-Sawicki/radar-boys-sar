@@ -206,15 +206,75 @@ def measure():
 
     return sp
 
-def backprojection(measurements_data, azimuth_length_m = 3, range_length_m = 6, resolution_m = 0.1):
+def backprojection(measurements_data, azimuth_length_m=3, range_length_m=6, resolution_m=0.1):
     print("Starting backprojection")
-
-    # Changing freqency to distance
-    max_freq = (2 * slope * range_length_m) / 3e8 + signal_freq
-    range_x = (max_freq) * c / (2 * slope)
-
-    azimuth = np.arange(-azimuth_length_m/2, azimuth_length_m/2, resolution_m)
-    range = np.arrange(0.1, range_length_m, resolution_m)
+    
+    # Parametry radaru (potrzebne do mapowania częstotliwość->odległość)
+    c = 3e8
+    slope = BW / ramp_time_s
+    
+    # Przygotowanie siatki obrazu
+    azimuth_axis = np.arange(-azimuth_length_m/2, azimuth_length_m/2, resolution_m)
+    range_axis = np.arange(0.1, range_length_m, resolution_m)
+    
+    # Inicjalizacja macierzy obrazu (zespolona - do koherentnego sumowania)
+    image = np.zeros((len(azimuth_axis), len(range_axis)), dtype=complex)
+    
+    # Pozycje anteny (zakładamy, że zaczynamy od pozycji 0 i poruszamy się liniowo)
+    antenna_positions = np.array(measurements_data['positions'])
+    
+    # Dane FFT z pomiarów
+    fft_data = measurements_data['data_fft']
+    
+    print(f"Image grid: {len(azimuth_axis)} x {len(range_axis)} pixels")
+    print(f"Processing {len(antenna_positions)} antenna positions...")
+    
+    # GŁÓWNA PĘTLA BACKPROJECTION
+    # Dla każdego piksela na obrazie...
+    for i, azim in enumerate(azimuth_axis):
+        if i % 10 == 0:  # Progress indicator
+            print(f"Processing azimuth row {i}/{len(azimuth_axis)}")
+        
+        for j, range_dist in enumerate(range_axis):
+            pixel_value = 0 + 0j
+            
+            # Dla każdej pozycji anteny...
+            for k, ant_pos in enumerate(antenna_positions):
+                # 1. Oblicz odległość geometryczną między anteną a pikselem
+                distance = np.sqrt((azim - ant_pos)**2 + range_dist**2)
+                
+                # 2. Mapuj odległość na częstotliwość (odwrotność procesu z dist)
+                #    Korzystamy z: dist = (freq - signal_freq) * c / (2 * slope)
+                #    więc: freq = (dist * 2 * slope / c) + signal_freq
+                freq_value = (distance * 2 * slope / c) + signal_freq
+                
+                # 3. Mapuj częstotliwość na indeks w tablicy FFT
+                #    freq jest w zakresie [-fs/2, fs/2] po fftshift
+                freq_index = int((freq_value + fs/2) / fs * len(freq))
+                
+                # 4. Zabezpieczenie przed indeksami poza zakresem
+                if 0 <= freq_index < len(fft_data[k]):
+                    # 5. Pobierz wartość zespoloną z FFT i dodaj do piksela
+                    pixel_value += fft_data[k][freq_index]
+            
+            # Zapisz skumulowaną wartość dla piksela
+            image[i, j] = pixel_value
+    
+    # Konwersja do skali dB do wyświetlenia
+    image_db = 20 * np.log10(np.abs(image) + 1e-15)  # +1e-15 aby uniknąć log(0)
+    
+    # Wyświetlenie wyniku
+    plt.figure(figsize=(10, 8))
+    plt.imshow(image_db, 
+               extent=[range_axis[0], range_axis[-1], azimuth_axis[-1], azimuth_axis[0]], 
+               aspect='auto', cmap='jet')
+    plt.colorbar(label='Amplitude [dB]')
+    plt.xlabel('Range [m]')
+    plt.ylabel('Azimuth [m]')
+    plt.title('SAR Image - Backprojection')
+    plt.show()
+    
+    return image, image_db
 
 if __name__ == "__main__":
     main()
