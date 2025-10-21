@@ -24,7 +24,7 @@ my_sdr = adi.ad9361(uri=sdr_ip)
 my_phaser = adi.CN0566(uri=rpi_ip, sdr=my_sdr)
 
 # Configure ESP32 connection
-ESP32_IP = "192.168.0.101"
+ESP32_IP = "192.168.0.108"
 ESP32_PORT = 3333
 MEASUREMENTS = 320     # How many steps/measurments
 STEP_SIZE_M = 0.0009844  # Step size [m]   31.5 cm in 320 steps
@@ -37,15 +37,12 @@ def connect_esp32():
     return s
 
 def send_step_and_wait(sock):
-    print("debug 1")
     sock.sendall(b"STEP_CW\n")
     data = sock.recv(1024)
     if b"DONE_CW" in data:
         print("ESP32 completed a step")
     else:
         print("Warning, received:", data)
-
-    print("debug 2")
 
 # Initialize both ADAR1000s, set gains to max, and all phases to 0
 my_phaser.configure(device_mode="rx")
@@ -116,78 +113,12 @@ my_phaser.delay_clk = "PFD"  # can be 'PFD' or 'PFD*CLK1'
 my_phaser.delay_start_en = 0  # delay start
 my_phaser.ramp_delay_en = 0  # delay between ramps.
 my_phaser.trig_delay_en = 0  # triangle delay
-my_phaser.ramp_mode = "single_sawtooth_burst"  # ramp_mode can be:  "disabled", "continuous_sawtooth", "continuous_triangular", "single_sawtooth_burst", "single_ramp_burst"
+my_phaser.ramp_mode = "continuous_triangular"  # ramp_mode can be:  "disabled", "continuous_sawtooth", "continuous_triangular", "single_sawtooth_burst", "single_ramp_burst"
 my_phaser.sing_ful_tri = (
     0  # full triangle enable/disable -- this is used with the single_ramp_burst mode
 )
-my_phaser.tx_trig_en = 1  # start a ramp with TXdata
+my_phaser.tx_trig_en = 0  # start a ramp with TXdata
 my_phaser.enable = 0  # 0 = PLL enable.  Write this last to update all the registers
-
-""" Synchronize chirps to the start of each Pluto receive buffer
-"""
-# Configure TDD controller
-sdr_pins = adi.one_bit_adc_dac(sdr_ip)
-sdr_pins.gpio_tdd_ext_sync = True # If set to True, this enables external capture triggering using the L24N GPIO on the Pluto.  When set to false, an internal trigger pulse will be generated every second
-tdd = adi.tddn(sdr_ip)
-sdr_pins.gpio_phaser_enable = True
-tdd.enable = False         # disable TDD to configure the registers
-tdd.sync_external = True
-tdd.startup_delay_ms = 0
-PRI_ms = ramp_time/1e3 + 1.0
-tdd.frame_length_ms = PRI_ms    # each chirp is spaced this far apart
-num_chirps = 1
-tdd.burst_count = num_chirps       # number of chirps in one continuous receive buffer
-
-tdd.channel[0].enable = True
-tdd.channel[0].polarity = False
-tdd.channel[0].on_raw = 0
-tdd.channel[0].off_raw = 10
-tdd.channel[1].enable = True
-tdd.channel[1].polarity = False
-tdd.channel[1].on_raw = 0
-tdd.channel[1].off_raw = 10
-tdd.channel[2].enable = True
-tdd.channel[2].polarity = False
-tdd.channel[2].on_raw = 0
-tdd.channel[2].off_raw = 10
-tdd.enable = True
-
-# From start of each ramp, how many "good" points do we want?
-# For best freq linearity, stay away from the start of the ramps
-ramp_time = int(my_phaser.freq_dev_time)
-ramp_time_s = ramp_time / 1e6
-begin_offset_time = 0.10 * ramp_time_s   # time in seconds
-print("actual freq dev time = ", ramp_time)
-good_ramp_samples = int((ramp_time_s-begin_offset_time) * sample_rate)
-start_offset_time = tdd.channel[0].on_ms/1e3 + begin_offset_time
-start_offset_samples = int(start_offset_time * sample_rate)
-
-# size the fft for the number of ramp data points
-power=8
-fft_size = int(2**power)
-num_samples_frame = int(tdd.frame_length_ms/1000*sample_rate)
-while num_samples_frame > fft_size:     
-    power=power+1
-    fft_size = int(2**power) 
-    if power==18:
-        break
-print("fft_size =", fft_size)
-
-# Pluto receive buffer size needs to be greater than total time for all chirps
-total_time = tdd.frame_length_ms * num_chirps   # time in ms
-print("Total Time for all Chirps:  ", total_time, "ms")
-buffer_time = 0
-power=12
-while total_time > buffer_time:     
-    power=power+1
-    buffer_size = int(2**power) 
-    buffer_time = buffer_size/my_sdr.sample_rate*1000   # buffer time in ms
-    if power==23:
-        break     # max pluto buffer size is 2**23, but for tdd burst mode, set to 2**22
-print("buffer_size:", buffer_size)
-my_sdr.rx_buffer_size = buffer_size
-print("buffer_time:", buffer_time, " ms")
-
 
 # Print config
 print(
@@ -250,7 +181,6 @@ def main():
             time.sleep(0.3)
 
         current_position = i * STEP_SIZE_M
-        print("debug 3")
         data_fft = measure()
 
         measurements_data['data_fft'].append(data_fft)
@@ -264,36 +194,11 @@ def main():
 def measure():
     global freq, dist
 
-    # Toggling the burst pin from the raspberry pi to start measurments 
-    my_phaser._gpios.gpio_burst = 0
-    my_phaser._gpios.gpio_burst = 1
-    my_phaser._gpios.gpio_burst = 0
-
-    print("debug 4")
-
     data = my_sdr.rx()
-
-    print("debug 6")
-    chan1 = data[0]
-    chan2 = data[1]
-    sum_data = chan1+chan2
-
-    print("debug 5")
-
-    # select just the linear portion of the last chirp
-    rx_bursts = np.zeros((num_chirps, good_ramp_samples), dtype=complex)
-    for burst in range(num_chirps):
-        start_index = start_offset_samples + burst*num_samples_frame
-        stop_index = start_index + good_ramp_samples
-        rx_bursts[burst] = sum_data[start_index:stop_index]
-        burst_data = np.ones(fft_size, dtype=complex)*1e-10
-        #win_funct = np.blackman(len(rx_bursts[burst]))
-        win_funct = np.ones(len(rx_bursts[burst]))
-        burst_data[start_offset_samples:(start_offset_samples+good_ramp_samples)] = rx_bursts[burst]*win_funct
-
-    # win_funct = np.blackman(len(data))
-    # y = data * win_funct
-    sp = np.absolute(np.fft.fft(burst_data))
+    data = data[0] + data[1]
+    win_funct = np.blackman(len(data))
+    y = data * win_funct
+    sp = np.absolute(np.fft.fft(y))
     sp = np.fft.fftshift(sp)
     s_mag = np.abs(sp) / np.sum(win_funct) # fft magnitude without phase information
     s_mag = np.maximum(s_mag, 10 ** (-15))
@@ -336,7 +241,7 @@ def backprojection(measurements_data, azimuth_length_m=1.8, range_length_m=6, re
             # Dla każdej pozycji anteny...
             for k, ant_pos in enumerate(antenna_positions):
                 # 1. Oblicz odległość geometryczną między anteną a pikselem
-                distance = np.sqrt((azim - ant_pos)**2 + range_dist**2)
+                distance = (np.sqrt((azim - ant_pos)**2 + range_dist**2))
                 
                 # 2. Mapuj odległość na częstotliwość (odwrotność procesu z dist)
                 #    Korzystamy z: dist = (freq - signal_freq) * c / (2 * slope)
@@ -360,9 +265,9 @@ def backprojection(measurements_data, azimuth_length_m=1.8, range_length_m=6, re
     
     # Wyświetlenie wyniku
     plt.figure(figsize=(10, 8))
-    plt.imshow(image_db.T, 
-               extent=[range_axis[0], range_axis[-1], azimuth_axis[-1], azimuth_axis[0]], 
-               aspect='auto', cmap='jet')
+    plt.imshow(image_db.T,  # .T - transpozycja macierzy
+            extent=[azimuth_axis[0], azimuth_axis[-1], range_axis[-1], range_axis[0]],
+            aspect='auto', cmap='jet')
     plt.colorbar(label='Amplitude [dB]')
     plt.xlabel('Azimuth [m]')
     plt.ylabel('Range [m]')

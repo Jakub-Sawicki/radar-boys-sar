@@ -24,10 +24,10 @@ my_sdr = adi.ad9361(uri=sdr_ip)
 my_phaser = adi.CN0566(uri=rpi_ip, sdr=my_sdr)
 
 # Configure ESP32 connection
-ESP32_IP = "192.168.0.103"
+ESP32_IP = "192.168.0.101"
 ESP32_PORT = 3333
 MEASUREMENTS = 200     # How many steps/measurments
-STEP_SIZE_M = 0.00018  # Step size [m]
+STEP_SIZE_M = 0.0009844  # Step size [m]   31.5 cm in 320 steps
 
 def connect_esp32():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -206,7 +206,7 @@ def measure():
 
     return sp
 
-def backprojection(measurements_data, azimuth_length_m=3, range_length_m=6, resolution_m=0.1):
+def backprojection(measurements_data, azimuth_length_m=1.8, range_length_m=6, resolution_azimuth_m=0.05, resolution_range_m=0.15):
     print("Starting backprojection")
     
     # Parametry radaru (potrzebne do mapowania częstotliwość->odległość)
@@ -214,8 +214,8 @@ def backprojection(measurements_data, azimuth_length_m=3, range_length_m=6, reso
     slope = BW / ramp_time_s
     
     # Przygotowanie siatki obrazu
-    azimuth_axis = np.arange(-azimuth_length_m/2, azimuth_length_m/2, resolution_m)
-    range_axis = np.arange(0.1, range_length_m, resolution_m)
+    azimuth_axis = np.arange(-azimuth_length_m/2, azimuth_length_m/2, resolution_azimuth_m)
+    range_axis = np.arange(0.1, range_length_m, resolution_range_m)
     
     # Inicjalizacja macierzy obrazu (zespolona - do koherentnego sumowania)
     image = np.zeros((len(azimuth_axis), len(range_axis)), dtype=complex)
@@ -265,7 +265,7 @@ def backprojection(measurements_data, azimuth_length_m=3, range_length_m=6, reso
     
     # Wyświetlenie wyniku
     plt.figure(figsize=(10, 8))
-    plt.imshow(image_db, 
+    plt.imshow(image_db.T, 
                extent=[range_axis[0], range_axis[-1], azimuth_axis[-1], azimuth_axis[0]], 
                aspect='auto', cmap='jet')
     plt.colorbar(label='Amplitude [dB]')
@@ -273,6 +273,38 @@ def backprojection(measurements_data, azimuth_length_m=3, range_length_m=6, reso
     plt.ylabel('Azimuth [m]')
     plt.title('SAR Image - Backprojection')
     plt.show()
+
+     # ----- DODATKOWY WYKRES: moc vs odległość dla pierwszego pomiaru -----
+    try:
+        # fft_data[0] w Twoim kodzie to już fftshift(np.abs(FFT))
+        first_fft = fft_data[0]
+        Nframe = len(first_fft)
+
+        # Utwórz oś częstotliwości (zgodnie z użytym fftshift)
+        freq_axis = np.linspace(-fs/2, fs/2, Nframe)  # [Hz]
+
+        # Przekształcenie częstotliwości -> odległość: dist = (freq - IF) * c / (2 * slope)
+        # Używamy tych samych parametrów co wcześniej w backprojection
+        c = 3e8
+        slope = BW / ramp_time_s
+        dist_axis = (freq_axis - signal_freq) * c / (2 * slope)  # [m]
+
+        # Filtrujemy tylko sensowny zakres (ujemne dystanse pomijamy)
+        mask = (dist_axis >= 0) & (dist_axis <= range_length_m)
+        dist_plot = dist_axis[mask]
+        power_db = 20 * np.log10(np.abs(first_fft[mask]) + 1e-15)
+
+        plt.figure(figsize=(8,4))
+        plt.plot(dist_plot, power_db)
+        plt.xlabel("Range [m]")
+        plt.ylabel("Magnitude [dB]")
+        plt.title("Moc vs odległość — pierwszy pomiar")
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+    except Exception as e:
+        print("Nie udało się narysować wykresu mocy dla pierwszego pomiaru:", e)
+    # --------------------------------------------------------------------
     
     return image, image_db
 
