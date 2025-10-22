@@ -17,6 +17,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import *
 from pyqtgraph.Qt import QtCore, QtGui
 from scipy.signal import hilbert
+import datetime
 
 # Instantiate all the Devices
 rpi_ip = "ip:phaser.local"  # IP address of the Raspberry Pi
@@ -27,7 +28,7 @@ my_phaser = adi.CN0566(uri=rpi_ip, sdr=my_sdr)
 # Configure ESP32 connection
 ESP32_IP = "192.168.0.105"
 ESP32_PORT = 3333
-MEASUREMENTS = 1     # How many steps/measurments
+MEASUREMENTS = 300     # How many steps/measurments
 STEP_SIZE_M = 0.0009844  # Step size [m]   31.5 cm in 320 steps
 
 def connect_esp32():
@@ -161,6 +162,8 @@ N_frame = fft_size
 freq = np.linspace(-fs / 2, fs / 2, int(N_frame))
 slope = BW / ramp_time_s
 dist = (freq - signal_freq) * c / (2 * slope)
+# dist = (freq - signal_freq) * c / (4 * slope)
+
 
 def main():
     # Connecting to ESP32
@@ -190,6 +193,14 @@ def main():
     sock.close()
     print("\nMeasurments completed")
 
+    # Saving measurment data to .npz file
+    save_data = True
+    if save_data:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # np.savez_compressed(f"measurements_{timestamp}.npz", **measurements_data)
+        np.savez_compressed(f"saved_measurments/300_measurments_{timestamp}.npz", **measurements_data)
+        print(f"Saved measurements to measurements_{timestamp}.npz")
+
     backprojection(measurements_data)
 
 def measure():
@@ -210,6 +221,7 @@ def measure():
     sp = sp / np.sum(win_funct)  # FFT amplitude normalization
     # usunięcie szybkich oscylacji (obwiednia Hilberta)
     envelope = np.abs(hilbert(sp))
+    # envelope = hilbert(sp)
     
 
     if MEASUREMENTS == 1:
@@ -232,7 +244,7 @@ def measure():
     return envelope
     # return sp
 
-def backprojection(measurements_data, azimuth_length_m=10, range_length_m=10, resolution_azimuth_m=0.05, resolution_range_m=0.15):
+def backprojection(measurements_data, azimuth_length_m=3, range_length_m=8, resolution_azimuth_m=0.15, resolution_range_m=0.20):
     print("Starting backprojection")
     
     # Parametry radaru (potrzebne do mapowania częstotliwość->odległość)
@@ -272,6 +284,7 @@ def backprojection(measurements_data, azimuth_length_m=10, range_length_m=10, re
                 #    Korzystamy z: dist = (freq - signal_freq) * c / (2 * slope)
                 #    więc: freq = (dist * 2 * slope / c) + signal_freq
                 freq_value = (distance * 2 * slope / c) + signal_freq
+                # freq_value = (distance * 4 * slope / c) + signal_freq
                 
                 # 3. Mapuj częstotliwość na indeks w tablicy FFT
                 #    freq jest w zakresie [-fs/2, fs/2] po fftshift
@@ -302,35 +315,35 @@ def backprojection(measurements_data, azimuth_length_m=10, range_length_m=10, re
     plt.show()
 
      # ----- DODATKOWY WYKRES: moc vs odległość dla pierwszego pomiaru -----
-    try:
-        # fft_data[0] w Twoim kodzie to już fftshift(np.abs(FFT))
-        first_fft = fft_data[0]
-        Nframe = len(first_fft)
+    # try:
+    #     # fft_data[0] w Twoim kodzie to już fftshift(np.abs(FFT))
+    #     first_fft = fft_data[0]
+    #     Nframe = len(first_fft)
 
-        # Utwórz oś częstotliwości (zgodnie z użytym fftshift)
-        freq_axis = np.linspace(-fs/2, fs/2, Nframe)  # [Hz]
+    #     # Utwórz oś częstotliwości (zgodnie z użytym fftshift)
+    #     freq_axis = np.linspace(-fs/2, fs/2, Nframe)  # [Hz]
 
-        # Przekształcenie częstotliwości -> odległość: dist = (freq - IF) * c / (2 * slope)
-        # Używamy tych samych parametrów co wcześniej w backprojection
-        c = 3e8
-        slope = BW / ramp_time_s
-        dist_axis = (freq_axis - signal_freq) * c / (2 * slope)  # [m]
+    #     # Przekształcenie częstotliwości -> odległość: dist = (freq - IF) * c / (2 * slope)
+    #     # Używamy tych samych parametrów co wcześniej w backprojection
+    #     c = 3e8
+    #     slope = BW / ramp_time_s
+    #     dist_axis = (freq_axis - signal_freq) * c / (2 * slope)  # [m]
 
-        # Filtrujemy tylko sensowny zakres (ujemne dystanse pomijamy)
-        mask = (dist_axis >= 0) & (dist_axis <= range_length_m)
-        dist_plot = dist_axis[mask]
-        power_db = 20 * np.log10(np.abs(first_fft[mask]) + 1e-15)
+    #     # Filtrujemy tylko sensowny zakres (ujemne dystanse pomijamy)
+    #     mask = (dist_axis >= 0) & (dist_axis <= range_length_m)
+    #     dist_plot = dist_axis[mask]
+    #     power_db = 20 * np.log10(np.abs(first_fft[mask]) + 1e-15)
 
-        plt.figure(figsize=(8,4))
-        plt.plot(dist_plot, power_db)
-        plt.xlabel("Range [m]")
-        plt.ylabel("Magnitude [dB]")
-        plt.title("Moc vs odległość — pierwszy pomiar")
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
-    except Exception as e:
-        print("Nie udało się narysować wykresu mocy dla pierwszego pomiaru:", e)
+    #     plt.figure(figsize=(8,4))
+    #     plt.plot(dist_plot, power_db)
+    #     plt.xlabel("Range [m]")
+    #     plt.ylabel("Magnitude [dB]")
+    #     plt.title("Moc vs odległość — pierwszy pomiar")
+    #     plt.grid(True)
+    #     plt.tight_layout()
+    #     plt.show()
+    # except Exception as e:
+    #     print("Nie udało się narysować wykresu mocy dla pierwszego pomiaru:", e)
     # --------------------------------------------------------------------
     
     return image, image_db
