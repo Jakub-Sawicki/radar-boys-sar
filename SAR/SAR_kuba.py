@@ -16,6 +16,7 @@ import pyqtgraph as pg
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import *
 from pyqtgraph.Qt import QtCore, QtGui
+from scipy.signal import hilbert
 
 # Instantiate all the Devices
 rpi_ip = "ip:phaser.local"  # IP address of the Raspberry Pi
@@ -24,9 +25,9 @@ my_sdr = adi.ad9361(uri=sdr_ip)
 my_phaser = adi.CN0566(uri=rpi_ip, sdr=my_sdr)
 
 # Configure ESP32 connection
-ESP32_IP = "192.168.0.101"
+ESP32_IP = "192.168.0.105"
 ESP32_PORT = 3333
-MEASUREMENTS = 200     # How many steps/measurments
+MEASUREMENTS = 1     # How many steps/measurments
 STEP_SIZE_M = 0.0009844  # Step size [m]   31.5 cm in 320 steps
 
 def connect_esp32():
@@ -200,13 +201,38 @@ def measure():
     y = data * win_funct
     sp = np.absolute(np.fft.fft(y))
     sp = np.fft.fftshift(sp)
+
+    # absolute value, not used right now
     s_mag = np.abs(sp) / np.sum(win_funct) # fft magnitude without phase information
     s_mag = np.maximum(s_mag, 10 ** (-15))
     s_dbfs = 20 * np.log10(s_mag / (2 ** 11))
 
-    return sp
+    sp = sp / np.sum(win_funct)  # FFT amplitude normalization
+    # usunięcie szybkich oscylacji (obwiednia Hilberta)
+    envelope = np.abs(hilbert(sp))
+    
 
-def backprojection(measurements_data, azimuth_length_m=1.8, range_length_m=6, resolution_azimuth_m=0.05, resolution_range_m=0.15):
+    if MEASUREMENTS == 1:
+        # plots showing the measured data
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+        ax1.plot(dist, envelope)
+        ax1.set_title('Dystans vs dBFS')
+        ax1.set_xlabel('Dystans')
+        ax1.set_ylabel('dBFS')
+
+        ax2.plot(freq, envelope)
+        ax2.set_title('Częstotliwość vs dBFS')
+        ax2.set_xlabel('Częstotliwość')
+        ax2.set_ylabel('dBFS')
+
+        plt.tight_layout()
+        plt.show()
+
+    return envelope
+    # return sp
+
+def backprojection(measurements_data, azimuth_length_m=10, range_length_m=10, resolution_azimuth_m=0.05, resolution_range_m=0.15):
     print("Starting backprojection")
     
     # Parametry radaru (potrzebne do mapowania częstotliwość->odległość)
@@ -215,22 +241,22 @@ def backprojection(measurements_data, azimuth_length_m=1.8, range_length_m=6, re
     
     # Przygotowanie siatki obrazu
     azimuth_axis = np.arange(-azimuth_length_m/2, azimuth_length_m/2, resolution_azimuth_m)
-    range_axis = np.arange(0.1, range_length_m, resolution_range_m)
+    range_axis = np.arange(1, range_length_m, resolution_range_m)
     
     # Inicjalizacja macierzy obrazu (zespolona - do koherentnego sumowania)
     image = np.zeros((len(azimuth_axis), len(range_axis)), dtype=complex)
+    # image = np.zeros((len(range_axis), len(azimuth_axis)), dtype=complex)
     
-    # Pozycje anteny (zakładamy, że zaczynamy od pozycji 0 i poruszamy się liniowo)
     antenna_positions = np.array(measurements_data['positions'])
+    antenna_positions -= np.mean(antenna_positions)
     
-    # Dane FFT z pomiarów
     fft_data = measurements_data['data_fft']
     
     print(f"Image grid: {len(azimuth_axis)} x {len(range_axis)} pixels")
     print(f"Processing {len(antenna_positions)} antenna positions...")
     
     # GŁÓWNA PĘTLA BACKPROJECTION
-    # Dla każdego piksela na obrazie...
+
     for i, azim in enumerate(azimuth_axis):
         if i % 10 == 0:  # Progress indicator
             print(f"Processing azimuth row {i}/{len(azimuth_axis)}")
@@ -238,7 +264,6 @@ def backprojection(measurements_data, azimuth_length_m=1.8, range_length_m=6, re
         for j, range_dist in enumerate(range_axis):
             pixel_value = 0 + 0j
             
-            # Dla każdej pozycji anteny...
             for k, ant_pos in enumerate(antenna_positions):
                 # 1. Oblicz odległość geometryczną między anteną a pikselem
                 distance = np.sqrt((azim - ant_pos)**2 + range_dist**2)
@@ -259,18 +284,20 @@ def backprojection(measurements_data, azimuth_length_m=1.8, range_length_m=6, re
             
             # Zapisz skumulowaną wartość dla piksela
             image[i, j] = pixel_value
+            # image[j, i] = pixel_value
     
     # Konwersja do skali dB do wyświetlenia
     image_db = 20 * np.log10(np.abs(image) + 1e-15)  # +1e-15 aby uniknąć log(0)
     
     # Wyświetlenie wyniku
     plt.figure(figsize=(10, 8))
+    # plt.imshow(image_db.T, aspect='auto', cmap='jet', origin='lower')
     plt.imshow(image_db.T, 
-               extent=[range_axis[0], range_axis[-1], azimuth_axis[-1], azimuth_axis[0]], 
-               aspect='auto', cmap='jet')
+               extent=[azimuth_axis[0], azimuth_axis[-1], range_axis[0], range_axis[-1]], 
+               aspect='auto', cmap='jet', origin='lower')
     plt.colorbar(label='Amplitude [dB]')
-    plt.xlabel('Range [m]')
-    plt.ylabel('Azimuth [m]')
+    plt.xlabel('Azimuth [m]')
+    plt.ylabel('Range [m]')
     plt.title('SAR Image - Backprojection')
     plt.show()
 

@@ -6,7 +6,7 @@ from scipy.optimize import minimize_scalar, fminbound, minimize
 from adi import ad9361
 from adi.cn0566 import CN0566
 
-ESP32_IP = "192.168.0.103"
+ESP32_IP = "192.168.0.108"
 ESP32_PORT = 3333
 MEASUREMENTS = 60     # ile kroków i pomiarów
 STEP_SIZE_M = 0.00018  # rozmiar kroku w metrach (0.18mm)
