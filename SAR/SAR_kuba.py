@@ -217,7 +217,7 @@ def measure():
     s_mag = np.abs(sp) / np.sum(win_funct) # fft magnitude without phase information
     s_mag = np.maximum(s_mag, 10 ** (-15))
     s_dbfs = 20 * np.log10(s_mag / (2 ** 11))
-
+    
     # sp = sp / np.sum(win_funct)  # FFT amplitude normalization
     # usunięcie szybkich oscylacji (obwiednia Hilberta)
     envelope = np.abs(hilbert(sp))
@@ -278,6 +278,9 @@ def backprojection(measurements_data, azimuth_length_m=3, range_length_m=8, reso
             for k, ant_pos in enumerate(antenna_positions):
                 # Calculating the distance between antenna position and pixel
                 distance = np.sqrt((azim - ant_pos)**2 + range_dist**2)
+
+                # Adding phase shift
+                phase_shift = np.exp(-1j * 4 * np.pi * distance * output_freq / c)
                 
                 # Mapping distance to frequency, dist = (freq - signal_freq) * c / (2 * slope) => freq = (dist * 2 * slope / c) + signal_freq
                 freq_value = (distance * 2 * slope / c) + signal_freq
@@ -287,7 +290,7 @@ def backprojection(measurements_data, azimuth_length_m=3, range_length_m=8, reso
                 
                 # Ignoring values outside of index
                 if 0 <= freq_index < len(fft_data[k]):
-                    pixel_value += fft_data[k][freq_index]
+                    pixel_value += fft_data[k][freq_index] * phase_shift
             
             image[i, j] = pixel_value
     
