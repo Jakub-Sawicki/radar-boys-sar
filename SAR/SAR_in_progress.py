@@ -16,6 +16,8 @@ import pyqtgraph as pg
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import *
 from pyqtgraph.Qt import QtCore, QtGui
+from scipy.signal import hilbert
+import datetime
 
 # Instantiate all the Devices
 rpi_ip = "ip:phaser.local"  # IP address of the Raspberry Pi
@@ -26,7 +28,7 @@ my_phaser = adi.CN0566(uri=rpi_ip, sdr=my_sdr)
 # Configure ESP32 connection
 ESP32_IP = "192.168.0.105"
 ESP32_PORT = 3333
-MEASUREMENTS = 1     # How many steps/measurments
+MEASUREMENTS = 300     # How many steps/measurments
 STEP_SIZE_M = 0.0009844  # Step size [m]   31.5 cm in 320 steps
 
 def connect_esp32():
@@ -160,6 +162,8 @@ N_frame = fft_size
 freq = np.linspace(-fs / 2, fs / 2, int(N_frame))
 slope = BW / ramp_time_s
 dist = (freq - signal_freq) * c / (2 * slope)
+# dist = (freq - signal_freq) * c / (4 * slope)
+
 
 def main():
     # Connecting to ESP32
@@ -189,6 +193,14 @@ def main():
     sock.close()
     print("\nMeasurments completed")
 
+    # Saving measurment data to .npz file
+    save_data = True
+    if save_data:
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        # np.savez_compressed(f"measurements_{timestamp}.npz", **measurements_data)
+        np.savez_compressed(f"saved_measurments/300_measurments_{timestamp}.npz", **measurements_data)
+        print(f"Saved measurements to measurements_{timestamp}.npz")
+
     backprojection(measurements_data)
 
 def measure():
@@ -200,13 +212,39 @@ def measure():
     y = data * win_funct
     sp = np.absolute(np.fft.fft(y))
     sp = np.fft.fftshift(sp)
+
+    # absolute value, not used right now
     s_mag = np.abs(sp) / np.sum(win_funct) # fft magnitude without phase information
     s_mag = np.maximum(s_mag, 10 ** (-15))
     s_dbfs = 20 * np.log10(s_mag / (2 ** 11))
 
-    return sp
+    sp = sp / np.sum(win_funct)  # FFT amplitude normalization
+    # usunięcie szybkich oscylacji (obwiednia Hilberta)
+    envelope = np.abs(hilbert(sp))
+    # envelope = hilbert(sp)
+    
 
-def backprojection(measurements_data, azimuth_length_m=1.8, range_length_m=6, resolution_azimuth_m=0.05, resolution_range_m=0.15):
+    if MEASUREMENTS == 1:
+        # plots showing the measured data
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+        ax1.plot(dist, envelope)
+        ax1.set_title('Dystans vs dBFS')
+        ax1.set_xlabel('Dystans')
+        ax1.set_ylabel('dBFS')
+
+        ax2.plot(freq, envelope)
+        ax2.set_title('Częstotliwość vs dBFS')
+        ax2.set_xlabel('Częstotliwość')
+        ax2.set_ylabel('dBFS')
+
+        plt.tight_layout()
+        plt.show()
+
+    return envelope
+    # return sp
+
+def backprojection(measurements_data, azimuth_length_m=3, range_length_m=8, resolution_azimuth_m=0.15, resolution_range_m=0.20):
     print("Starting backprojection")
     
     # Parametry radaru (potrzebne do mapowania częstotliwość->odległość)
@@ -215,7 +253,7 @@ def backprojection(measurements_data, azimuth_length_m=1.8, range_length_m=6, re
     
     # Przygotowanie siatki obrazu
     azimuth_axis = np.arange(-azimuth_length_m/2, azimuth_length_m/2, resolution_azimuth_m)
-    range_axis = np.arange(0.1, range_length_m, resolution_range_m)
+    range_axis = np.arange(1, range_length_m, resolution_range_m)
     
     # Inicjalizacja macierzy obrazu (zespolona - do koherentnego sumowania)
     image = np.zeros((len(azimuth_axis), len(range_axis)), dtype=complex)
@@ -246,6 +284,7 @@ def backprojection(measurements_data, azimuth_length_m=1.8, range_length_m=6, re
                 #    Korzystamy z: dist = (freq - signal_freq) * c / (2 * slope)
                 #    więc: freq = (dist * 2 * slope / c) + signal_freq
                 freq_value = (distance * 2 * slope / c) + signal_freq
+                # freq_value = (distance * 4 * slope / c) + signal_freq
                 
                 # 3. Mapuj częstotliwość na indeks w tablicy FFT
                 #    freq jest w zakresie [-fs/2, fs/2] po fftshift
@@ -257,24 +296,17 @@ def backprojection(measurements_data, azimuth_length_m=1.8, range_length_m=6, re
                     pixel_value += fft_data[k][freq_index]
             
             # Zapisz skumulowaną wartość dla piksela
-            image[i, j] = i*100 + j*100
+            image[i, j] = pixel_value
             # image[j, i] = pixel_value
-
-    print(np.abs(image))
     
     # Konwersja do skali dB do wyświetlenia
     image_db = 20 * np.log10(np.abs(image) + 1e-15)  # +1e-15 aby uniknąć log(0)
-    image_db[0][0] = image_db[0][1]
-    image_db[0][39] = image_db[0][0]
-    print(image_db.shape)
-
-    print(image_db)
     
     # Wyświetlenie wyniku
     plt.figure(figsize=(10, 8))
     # plt.imshow(image_db.T, aspect='auto', cmap='jet', origin='lower')
     plt.imshow(image_db.T, 
-               extent=[azimuth_axis[0], azimuth_axis[-1], range_axis[-1], range_axis[0]], 
+               extent=[azimuth_axis[0], azimuth_axis[-1], range_axis[0], range_axis[-1]], 
                aspect='auto', cmap='jet', origin='lower')
     plt.colorbar(label='Amplitude [dB]')
     plt.xlabel('Azimuth [m]')

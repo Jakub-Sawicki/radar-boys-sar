@@ -198,7 +198,7 @@ def main():
     if save_data:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         # np.savez_compressed(f"measurements_{timestamp}.npz", **measurements_data)
-        np.savez_compressed(f"saved_measurments/300_measurments_{timestamp}.npz", **measurements_data)
+        np.savez_compressed(f"saved_measurments/300_{timestamp}.npz", **measurements_data)
         print(f"Saved measurements to measurements_{timestamp}.npz")
 
     backprojection(measurements_data)
@@ -218,11 +218,10 @@ def measure():
     s_mag = np.maximum(s_mag, 10 ** (-15))
     s_dbfs = 20 * np.log10(s_mag / (2 ** 11))
 
-    sp = sp / np.sum(win_funct)  # FFT amplitude normalization
+    # sp = sp / np.sum(win_funct)  # FFT amplitude normalization
     # usunięcie szybkich oscylacji (obwiednia Hilberta)
     envelope = np.abs(hilbert(sp))
     # envelope = hilbert(sp)
-    
 
     if MEASUREMENTS == 1:
         # plots showing the measured data
@@ -241,8 +240,8 @@ def measure():
         plt.tight_layout()
         plt.show()
 
-    return envelope
-    # return sp
+    # return envelope
+    return sp
 
 def backprojection(measurements_data, azimuth_length_m=3, range_length_m=8, resolution_azimuth_m=0.15, resolution_range_m=0.20):
     print("Starting backprojection")
@@ -277,27 +276,20 @@ def backprojection(measurements_data, azimuth_length_m=3, range_length_m=8, reso
             pixel_value = 0 + 0j
             
             for k, ant_pos in enumerate(antenna_positions):
-                # 1. Oblicz odległość geometryczną między anteną a pikselem
+                # Calculating the distance between antenna position and pixel
                 distance = np.sqrt((azim - ant_pos)**2 + range_dist**2)
                 
-                # 2. Mapuj odległość na częstotliwość (odwrotność procesu z dist)
-                #    Korzystamy z: dist = (freq - signal_freq) * c / (2 * slope)
-                #    więc: freq = (dist * 2 * slope / c) + signal_freq
+                # Mapping distance to frequency, dist = (freq - signal_freq) * c / (2 * slope) => freq = (dist * 2 * slope / c) + signal_freq
                 freq_value = (distance * 2 * slope / c) + signal_freq
-                # freq_value = (distance * 4 * slope / c) + signal_freq
                 
-                # 3. Mapuj częstotliwość na indeks w tablicy FFT
-                #    freq jest w zakresie [-fs/2, fs/2] po fftshift
+                # Mapping frequency to index
                 freq_index = int((freq_value + fs/2) / fs * len(freq))
                 
-                # 4. Zabezpieczenie przed indeksami poza zakresem
+                # Ignoring values outside of index
                 if 0 <= freq_index < len(fft_data[k]):
-                    # 5. Pobierz wartość zespoloną z FFT i dodaj do piksela
                     pixel_value += fft_data[k][freq_index]
             
-            # Zapisz skumulowaną wartość dla piksela
             image[i, j] = pixel_value
-            # image[j, i] = pixel_value
     
     # Konwersja do skali dB do wyświetlenia
     image_db = 20 * np.log10(np.abs(image) + 1e-15)  # +1e-15 aby uniknąć log(0)
