@@ -28,8 +28,11 @@ my_phaser = adi.CN0566(uri=rpi_ip, sdr=my_sdr)
 # Configure ESP32 connection
 ESP32_IP = "192.168.0.105"
 ESP32_PORT = 3333
-MEASUREMENTS = 300     # How many steps/measurments
-STEP_SIZE_M = 0.0009844  # Step size [m]   31.5 cm in 320 steps
+MEASUREMENTS = 330     # How many steps/measurments
+STEP_SIZE_M = 0.00099  # Step size [m]   31.5 cm in 320 steps // 32.7 cm in 330 steps
+
+# Configure data measurment saving
+save_data = True
 
 def connect_esp32():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -182,7 +185,7 @@ def main():
         
         if i > 0:
             send_step_and_wait(sock)
-            time.sleep(0.3)
+            time.sleep(0.05)
 
         current_position = i * STEP_SIZE_M
         data_fft = measure()
@@ -194,14 +197,15 @@ def main():
     print("\nMeasurments completed")
 
     # Saving measurment data to .npz file
-    save_data = True
     if save_data:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         # np.savez_compressed(f"measurements_{timestamp}.npz", **measurements_data)
-        np.savez_compressed(f"saved_measurments/300_{timestamp}.npz", **measurements_data)
+        # np.savez_compressed(f"saved_measurments/300_{timestamp}.npz", **measurements_data)
+        # np.savez_compressed(f"saved_measurments/raw_data/single_raw_{timestamp}.npz", **measurements_data)
+        np.savez_compressed(f"saved_measurments/raw_data/330_3_80m_lewy_v1.npz", **measurements_data)
         print(f"Saved measurements to measurements_{timestamp}.npz")
 
-    backprojection(measurements_data)
+    #backprojection(measurements_data)
 
 def measure():
     global freq, dist
@@ -221,7 +225,7 @@ def measure():
     # sp = sp / np.sum(win_funct)  # FFT amplitude normalization
     # usunięcie szybkich oscylacji (obwiednia Hilberta)
     envelope = np.abs(hilbert(sp))
-    # envelope = hilbert(sp)
+    envelope = hilbert(sp)
 
     if MEASUREMENTS == 1:
         # plots showing the measured data
@@ -240,8 +244,8 @@ def measure():
         plt.tight_layout()
         plt.show()
 
-    # return envelope
-    return sp
+    return data
+    # return sp
 
 def backprojection(measurements_data, azimuth_length_m=3, range_length_m=8, resolution_azimuth_m=0.15, resolution_range_m=0.20):
     print("Starting backprojection")
