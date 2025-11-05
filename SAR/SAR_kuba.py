@@ -202,7 +202,7 @@ def main():
         # np.savez_compressed(f"measurements_{timestamp}.npz", **measurements_data)
         # np.savez_compressed(f"saved_measurments/300_{timestamp}.npz", **measurements_data)
         # np.savez_compressed(f"saved_measurments/raw_data/single_raw_{timestamp}.npz", **measurements_data)
-        np.savez_compressed(f"saved_measurments/raw_data/330_3_80m_lewy_v1.npz", **measurements_data)
+        np.savez_compressed(f"saved_measurments/raw_data/330_20m_v1.npz", **measurements_data)
         print(f"Saved measurements to measurements_{timestamp}.npz")
 
     #backprojection(measurements_data)

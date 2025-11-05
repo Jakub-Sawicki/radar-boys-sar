@@ -6,10 +6,10 @@ from scipy.optimize import minimize_scalar, fminbound, minimize
 from adi import ad9361
 from adi.cn0566 import CN0566
 
-ESP32_IP = "192.168.0.108"
+ESP32_IP = "192.168.0.105"
 ESP32_PORT = 3333
-MEASUREMENTS = 60     # ile kroków i pomiarów
-STEP_SIZE_M = 0.00018  # rozmiar kroku w metrach (0.18mm)
+MEASUREMENTS = 330     # ile kroków i pomiarów
+STEP_SIZE_M = 0.0001  # rozmiar kroku w metrach (0.18mm)
 
 # ----------- ESP 32 handling -----------
 
@@ -241,7 +241,7 @@ def main():
         
         if i > 0: 
             send_step_and_wait(sock)
-            time.sleep(0.3)
+            time.sleep(0.05)
         
         current_position = i * STEP_SIZE_M
         
@@ -265,6 +265,13 @@ def main():
     
     sock.close()
     print("\nPomiary zakończone, rozpoczynam analizę...")
+
+    # Saving measurment data to .npz file
+    save_data = True
+    if save_data:
+        # np.savez_compressed(f"measurements_{timestamp}.npz", **measurements_data)
+        np.savez_compressed(f"measurements/30_deg_sar.npz", **measurements_data)
+        print(f"Saved measurements")
 
     print("\n[INFO] Analiza MLE SAR z syntetycznej apertury (kanały 0 i 1)...")
     angle_sar_aperture_dual = analyze_mle_with_aperture_dual(measurements_data, phaser.SignalFreq, verbose=True)

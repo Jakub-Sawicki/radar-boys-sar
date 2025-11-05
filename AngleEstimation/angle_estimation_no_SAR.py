@@ -403,6 +403,13 @@ def main():
     
     sock.close()
     print("\n[INFO] Pomiary zakończone, rozpoczynam analizę...")
+
+    # Saving measurment data to .npz file
+    save_data = True
+    if save_data:
+        # np.savez_compressed(f"measurements_{timestamp}.npz", **measurements_data)
+        np.savez_compressed(f"measurements/18_4_deg_single.npz", **measurements_data)
+        print(f"Saved measurements")
     
     # Oblicz statystyki (ignorując NaN)
     # valid_mle_angles = [a for a in measurements_data['mle_angles'] if not np.isnan(a)]
