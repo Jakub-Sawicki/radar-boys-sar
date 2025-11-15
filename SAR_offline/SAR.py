@@ -12,14 +12,11 @@ import datetime
 from scipy.signal import hilbert, detrend, butter, filtfilt
 from scipy.signal.windows import tukey
 from scipy.ndimage import gaussian_filter1d
+import sys
 
 # ==========================================================
 # ---- KONFIGURACJA ----
 # ==========================================================
-# DATA_FILE = "SAR_offline/measurments/single_raw_20251029_123522.npz"
-# DATA_FILE = "SAR_offline/measurments/300_raw_20251029_122605.npz"
-DATA_FILE = "SAR_offline/measurments/300_raw_20251029_123021.npz"
-# DATA_FILE = "SAR_offline/measurments/300_raw_20251029_123441.npz"
 
 BW = 500e6           # Bandwidth [Hz]
 ramp_time_s = 0.5e-3 # Ramp time [s] (0.5e3 us)
@@ -35,21 +32,41 @@ freq = np.linspace(-fs / 2, fs / 2, int(N_frame))
 slope = BW / ramp_time_s
 dist = (freq - signal_freq) * c / (2 * slope)
 
+
+# Ustawienia generacji obrazu
+
+DATA_FILE = "measurments/330_7m_lewo_v2.npz"
+# DATA_FILE = "measurments/330_bez_obiektu.npz"
+
+azimuth_length_m=2.0
+range_length_m=14
+resolution_azimuth_m=0.3
+resolution_range_m=0.40
+
+calibration_factor=3.8/5.5
+vmin_val=None
+vmax_val=None
+vmin_val=80
+vmax_val=100
+
+# Dla 3.8m: azimuth_length_m=2.4, range_length_m=11, resolution_azimuth_m=0.15, resolution_range_m=0.40
+# Dla 7m: 
+
+range_axis_start = 3
+
 # ==========================================================
 # ---- FUNKCJE ----
 # ==========================================================
 
 def load_measurements(file_path):
     """Wczytaj zapisane dane pomiarowe z pliku .npz"""
-    data = np.load(file_path, allow_pickle=True)
-    print(f"\nWczytano plik: {file_path}")
-    print(f"Zawiera {len(data['data_fft'])} pomiarów")
-
-    # --- DODAJ TĘ LINIĘ ---
-    if 'positions' in data:
-        print(f"INFO: Próbka pozycji (pierwsze 10): {data['positions'][0:10]}")
-        print(f"INFO: Zakres pozycji: od {data['positions'][0]} do {data['positions'][-1]}")
-    # --- KONIEC ---
+    try:
+        data = np.load(file_path, allow_pickle=True)
+        print(f"\nWczytano plik: {file_path}")
+        print(f"Zawiera {len(data['data_fft'])} pomiarów")
+    except FileNotFoundError:
+        print(f"\nBŁĄD: Nie znaleziono pliku: {file_path}")
+        sys.exit(1)
 
     return data
 
@@ -73,7 +90,6 @@ def process_measurements(measurements_data):
         y = filtfilt(b, a, data)
 
         # Okienkowanie
-        # win_funct = np.blackman(len(data))
         win_funct = tukey(len(y), alpha=0.3)
         y = y * win_funct
 
@@ -83,7 +99,8 @@ def process_measurements(measurements_data):
     print(f"Przetwarzanie zakończone\n")
     return processed_data
 
-def backprojection(measurements_data, azimuth_length_m=0.6, range_length_m=6, resolution_azimuth_m=0.1, resolution_range_m=0.2):
+
+def backprojection(measurements_data, azimuth_length_m=2.4, range_length_m=11, resolution_azimuth_m=0.15, resolution_range_m=0.40):
     print("Starting backprojection")
     
     # Parametry radaru (potrzebne do mapowania częstotliwość->odległość)
@@ -92,7 +109,7 @@ def backprojection(measurements_data, azimuth_length_m=0.6, range_length_m=6, re
     
     # Przygotowanie siatki obrazu
     azimuth_axis = np.arange(-azimuth_length_m/2, azimuth_length_m/2, resolution_azimuth_m)
-    range_axis = np.arange(1, range_length_m, resolution_range_m)
+    range_axis = np.arange(range_axis_start, range_length_m, resolution_range_m)
     
     # Inicjalizacja macierzy obrazu (zespolona - do koherentnego sumowania)
     image = np.zeros((len(azimuth_axis), len(range_axis)), dtype=complex)
@@ -124,6 +141,7 @@ def backprojection(measurements_data, azimuth_length_m=0.6, range_length_m=6, re
                 
                 # Mapping distance to frequency, dist = (freq - signal_freq) * c / (2 * slope) => freq = (dist * 2 * slope / c) + signal_freq
                 freq_value = (distance * 2 * slope / c) + signal_freq
+                # freq_value = (distance * 4 * slope / c) + signal_freq
 
                 # Ustal oś częstotliwości
                 freq_axis = np.linspace(-fs/2, fs/2, len(fft_data[k]))
@@ -136,19 +154,35 @@ def backprojection(measurements_data, azimuth_length_m=0.6, range_length_m=6, re
                     pixel_value += sample * phase_shift
             
             image[i, j] = pixel_value
-    
+
     # Konwersja do skali dB do wyświetlenia
     image_db = 20 * np.log10(np.abs(image) + 1e-15)  # +1e-15 aby uniknąć log(0)
 
     return image_db, azimuth_axis, range_axis
 
-def image_plot(image_db, azimuth_axis, range_axis):
+def image_plot(image_db, azimuth_axis, range_axis, calibration_factor, vmin_val, vmax_val):
+
+    # Kalibracja odległości
+    scaled_range_axis = range_axis * calibration_factor
+
+    plot_kwargs = {
+        'extent': [azimuth_axis[0], azimuth_axis[-1], 
+                   scaled_range_axis[0], scaled_range_axis[-1]],
+        'aspect': 'auto',
+        'cmap': 'plasma', # jet, viridis, YlOrRd, Reds, plasma
+        'origin': 'lower'
+    }
+
+    # Normalizacja amplitudy (skali kolorów) jeśli zostały podane wartości maksymalne i minimalne
+    if vmin_val is not None:
+        plot_kwargs['vmin'] = vmin_val
+    if vmax_val is not None:
+        plot_kwargs['vmax'] = vmax_val
+
     # Wyświetlenie wyniku
     plt.figure(figsize=(10, 8))
-    # plt.imshow(image_db.T, aspect='auto', cmap='jet', origin='lower')
-    plt.imshow(image_db.T, 
-               extent=[azimuth_axis[0], azimuth_axis[-1], range_axis[0], range_axis[-1]], 
-               aspect='auto', cmap='jet', origin='lower')
+    # plt.imshow(image_db.T, **plot_kwargs)
+    plt.imshow(np.flip(image_db.T, axis=1), **plot_kwargs)
     plt.colorbar(label='Amplitude [dB]')
     plt.xlabel('Azimuth [m]')
     plt.ylabel('Range [m]')
@@ -205,9 +239,9 @@ if __name__ == "__main__":
     if len(measurements_data['positions']) == 1:
         data_plot(processed_data)   
     
-    image_db, azimuth_axis, range_axis = backprojection(processed_data)
+    image_db, azimuth_axis, range_axis = backprojection(processed_data, azimuth_length_m, range_length_m, resolution_azimuth_m, resolution_range_m)
 
-    image_plot(image_db, azimuth_axis, range_axis)
+    image_plot(image_db, azimuth_axis, range_axis, calibration_factor, vmin_val, vmax_val)
     
     print("\n" + "="*60)
     print("Przetwarzanie offline zakończone.")
