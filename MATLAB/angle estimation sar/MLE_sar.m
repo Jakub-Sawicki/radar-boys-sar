@@ -30,7 +30,7 @@ function angleDetEstimated = MLE_sar(Y, elementPositions_mm, freq)
             angleCost = CostFunction(i);
         end
     end
-    % angleDetEstimated = fminsearch(@CostFunction, 0);
+    angleDetEstimated = fminsearch(@CostFunction, -20);
     disp("Oszacowany kąt:");
     disp(angleDetEstimated);
 end

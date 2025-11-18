@@ -9,7 +9,7 @@ from adi.cn0566 import CN0566
 ESP32_IP = "192.168.0.105"
 ESP32_PORT = 3333
 MEASUREMENTS = 330     # ile kroków i pomiarów
-STEP_SIZE_M = 0.0001  # rozmiar kroku w metrach (0.18mm)
+STEP_SIZE_M = 0.0001  # rozmiar kroku w metrach (0.1mm)
 
 # ----------- ESP 32 handling -----------
 
