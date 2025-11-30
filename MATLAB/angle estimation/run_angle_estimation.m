@@ -4,7 +4,7 @@ close all
 
 % monopulsePolynom=getMonopulsePolynom(getConfig().M);
 
-SignalAmplitude=[10];
+SignalAmplitude=[20];
 TargetAngle=[-20];
 
 measure=getMeasure(TargetAngle,SignalAmplitude);

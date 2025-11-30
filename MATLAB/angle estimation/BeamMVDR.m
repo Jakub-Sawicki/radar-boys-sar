@@ -9,7 +9,11 @@ function angleDetEstimated=BeamMVDR(Y)
        pval(k)=PMVDR(angleVec(k));
    end
    figure
-   plot(angleVec,pval);
+   plot(angleVec,pval, 'LineWidth', 1.5);
+    xlabel('Kąt [deg]');
+    ylabel('Funkcja kosztu J(\theta)');
+   grid on;
+    hold off;
 
     % fminsearch can give incorrect results when starting point is in nearby local extremum
     angleDetEstimated=fminsearch(PMVDR,0);

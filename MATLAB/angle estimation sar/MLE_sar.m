@@ -16,11 +16,12 @@ function angleDetEstimated = MLE_sar(Y, elementPositions_mm, freq)
     for k = 1:length(angleVec)
         pval(k) = CostFunction(angleVec(k));
     end
-    figure;
-    plot(angleVec, pval);
-    title("MLE z syntetycznej anteny");
-    xlabel("Kąt [deg]");
-    ylabel("Funkcja kosztu");
+    figure
+   plot(angleVec,pval, 'LineWidth', 1.5);
+    xlabel('Kąt [deg]');
+    ylabel('Funkcja kosztu J(\theta)');
+   grid on;
+    hold off;
     
     angleDetEstimated = fminsearch(@CostFunction, minAngle);
     angleCost = CostFunction(minAngle);

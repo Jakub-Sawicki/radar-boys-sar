@@ -20,6 +20,6 @@ for k = 0:cfg.numSteps-1
     virtualArray = [virtualArray; measure_1; measure_2]; % każdy pomiar to 2 anteny
 end
 
-% MLE_sar(virtualArray, elementPositions, cfg.freq);
-kroki = [15, 40, 330]; % Przykładowe liczby kroków do porównania (zmień wg potrzeb, max to cfg.numSteps)
-MLE_comp(virtualArray, kroki, elementPositions, cfg.freq);
+MLE_sar(virtualArray, elementPositions, cfg.freq);
+% kroki = [15, 40, 330]; % Przykładowe liczby kroków do porównania (zmień wg potrzeb, max to cfg.numSteps)
+% MLE_comp(virtualArray, kroki, elementPositions, cfg.freq);
