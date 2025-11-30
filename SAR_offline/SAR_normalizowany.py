@@ -35,20 +35,21 @@ dist = (freq - signal_freq) * c / (2 * slope)
 
 # Ustawienia generacji obrazu
 
-# DATA_FILE = "SAR_offline/measurements/330_9m_v1.npz"
-# DATA_FILE = "SAR_offline/measurements/330_3_80m_prawy.npz"
-DATA_FILE = "SAR_offline/measurements/330_bez_obiektu.npz"
+DATA_FILE = "SAR_offline/measurements/330_7m_v2.npz"
+# DATA_FILE = "SAR_offline/measurements/330_3_80m_v2.npz"
+# DATA_FILE = "SAR_offline/measurements/330_bez_obiektu.npz"
 
-azimuth_length_m=2.5
-range_length_m=14
+azimuth_length_m=3
+range_length_m=16
 resolution_azimuth_m=0.17
 resolution_range_m=0.30
 
+dynamics = 10
 calibration_factor=1 # 3.8/5.5
 vmin_val=None
 vmax_val=None
-vmin_val=80
-vmax_val=100
+# vmin_val=90
+# vmax_val=115
 
 # Dla 3.8m: azimuth_length_m=2.4, range_length_m=11, resolution_azimuth_m=0.15, resolution_range_m=0.40
 # Dla 7m: 
@@ -165,24 +166,52 @@ def image_plot(image_db, azimuth_axis, range_axis, calibration_factor, vmin_val,
     # Kalibracja odległości
     scaled_range_axis = range_axis * calibration_factor
 
+    # 1. Normalizacja względem maksimum (Peak Normalization)
+    # Znajdujemy najsilniejszy punkt na obrazie
+    max_val = np.max(image_db)
+    
+    # Przesuwamy wartości tak, aby maksimum wynosiło 0 dB
+    # To ułatwia interpretację (0 dB = najsilniejszy cel)
+    image_normalized = image_db - max_val
+
+    # 2. Kalibracja osi odległości
+    scaled_range_axis = range_axis * calibration_factor
+
+    # 3. Automatyczne ustalanie zakresu dynamiki (jeśli nie podano)
+    # Standardowo w SAR interesuje nas zakres ok. 30-60 dB od szczytu.
+    # Poniżej tego poziomu zazwyczaj jest tylko szum.
+    
+    if vmax_val is None:
+        plot_vmax = 0  # Skoro znormalizowaliśmy, max to zawsze 0
+    else:
+        plot_vmax = vmax_val
+
+    if vmin_val is None:
+        # Domyślny zakres dynamiczny: 40 dB (pokaż wszystko od 0 do -40 dB)
+        plot_vmin = plot_vmax - dynamics
+    else:
+        plot_vmin = vmin_val
+
     plot_kwargs = {
         'extent': [azimuth_axis[0], azimuth_axis[-1], 
                    scaled_range_axis[0], scaled_range_axis[-1]],
         'aspect': 'auto',
         'cmap': 'plasma', # jet, viridis, YlOrRd, Reds, plasma
-        'origin': 'lower'
+        'origin': 'lower',
+        'vmin': plot_vmin,
+        'vmax': plot_vmax
     }
 
     # Normalizacja amplitudy (skali kolorów) jeśli zostały podane wartości maksymalne i minimalne
-    if vmin_val is not None:
-        plot_kwargs['vmin'] = vmin_val
-    if vmax_val is not None:
-        plot_kwargs['vmax'] = vmax_val
+    # if vmin_val is not None:
+    #     plot_kwargs['vmin'] = vmin_val
+    # if vmax_val is not None:
+    #     plot_kwargs['vmax'] = vmax_val
 
     # Wyświetlenie wyniku
     plt.figure(figsize=(10, 8))
-    # plt.imshow(np.flip(image_normalized.T, axis=1), **plot_kwargs)
-    plt.imshow(np.flip(image_db.T, axis=1), **plot_kwargs)
+    plt.imshow(np.flip(image_normalized.T, axis=1), **plot_kwargs)
+    # plt.imshow(np.flip(image_db.T, axis=1), **plot_kwargs)
     plt.colorbar(label='Amplituda [dB]')
     plt.xlabel('Azimut [m]')
     plt.ylabel('Zasięg [m]')

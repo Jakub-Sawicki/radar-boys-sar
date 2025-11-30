@@ -34,24 +34,25 @@ dist = (freq - signal_freq) * c / (2 * slope)
 
 # Ustawienia generacji obrazu
 
-DATA_FILE = "measurments/330_3_80m_v2.npz"
+DATA_FILE = "SAR_offline/measurements/330_3_80m_v2.npz"
+# DATA_FILE = "SAR_offline/measurements/330_bez_obiektu.npz"
 # DATA_FILE = "measurments/330_bez_obiektu.npz"
 
-azimuth_length_m=2
-range_length_m=9
-resolution_azimuth_m=0.3
-resolution_range_m=0.4
+azimuth_length_m=2.5
+range_length_m=8
+resolution_azimuth_m=0.17
+resolution_range_m=0.30
 
-calibration_factor=3.8/5.5
+calibration_factor=1#3.8/5.5
 vmin_val=None
 vmax_val=None
-vmin_val=75
+vmin_val=95
 # vmax_val=105
 
 # Dla 3.8m: azimuth_length_m=2.4, range_length_m=11, resolution_azimuth_m=0.15, resolution_range_m=0.40
 # Dla 7m: 
 
-range_axis_start = 1
+range_axis_start = 3
 
 # ==========================================================
 # ---- FUNKCJE ----
@@ -75,10 +76,9 @@ def process_measurements(measurements_data):
     }
     
     # Definicja filtra
-    fs_nyquist = fs / 2
-    cutoff_freq = 80e3 
-    wn = cutoff_freq / fs_nyquist # Normalizowana częstotliwość (ok. 0.267)
-    b, a = butter(4, 0.4, btype='high') 
+    low = 0.4
+    high = 0.666
+    b,a = butter(6, [low, high], 'bandpass')
 
     for i, data in enumerate(measurements_data['data_fft']):
         # Implementacja filtra
@@ -86,7 +86,7 @@ def process_measurements(measurements_data):
 
         # Okienkowanie
         # win_funct = np.blackman(len(data))
-        win_funct = tukey(len(y), alpha=0.3)
+        win_funct = tukey(len(y), alpha=0.8)
         y = y * win_funct
 
         sp = np.fft.fftshift(np.fft.fft(y))
